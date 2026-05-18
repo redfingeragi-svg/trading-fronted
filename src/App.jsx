@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 const BACKEND_URL = "https://trading-backend-nu.vercel.app";
 // ─── GANTI DENGAN ANTHROPIC API KEY KAMU ──────────────────────
 // Dapatkan di: https://console.anthropic.com/
-const ANTHROPIC_KEY = "MASUKKAN_API_KEY_KAMU_DISINI";
+const ANTHROPIC_KEY = "sk-ant-api03-R2D...igAA";
 // ──────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `Kamu adalah AI Trading Agent crypto dengan 3-layer decision system:
