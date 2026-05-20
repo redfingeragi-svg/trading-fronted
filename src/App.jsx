@@ -584,6 +584,7 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [chatLoad, setChatLoad] = useState(false);
   const [activeTab, setActiveTab] = useState("signal");
+  const [aiModel, setAiModel] = useState("deepseek"); // "deepseek" | "hermes"
   const endRef = useRef(null);
 
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMsgs, chatLoad]);
@@ -640,7 +641,7 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nh, context: ctx }),
+        body: JSON.stringify({ messages: nh, context: ctx, model: aiModel }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -737,34 +738,87 @@ export default function App() {
         {/* CHAT TAB */}
         {activeTab==="chat" && (
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+            {/* MODEL SELECTOR */}
+            <div style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)",background:"rgba(0,0,0,0.25)"}}>
+              <div style={{fontSize:"8px",color:"#3a5060",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"7px"}}>Pilih AI Assistant</div>
+              <div style={{display:"flex",gap:"8px"}}>
+                {[
+                  { id:"deepseek", label:"DeepSeek V4 Pro", icon:"🧠", desc:"Reasoning kuat · $0.001/tanya", color:"#00c4ff" },
+                  { id:"hermes",   label:"Nous Hermes 2",   icon:"⚡", desc:"Gratis · Ultra cepat",          color:"#a080ff" },
+                ].map(m=>(
+                  <button key={m.id} onClick={()=>{setAiModel(m.id);setChatMsgs([]);setChatHistory([]);}}
+                    style={{
+                      flex:1, padding:"9px 10px", borderRadius:"9px", cursor:"pointer",
+                      border:`1px solid ${aiModel===m.id ? m.color : "rgba(255,255,255,0.08)"}`,
+                      background: aiModel===m.id ? `rgba(${m.color==="#00c4ff"?"0,196,255":"120,80,255"},0.1)` : "rgba(255,255,255,0.03)",
+                      transition:"all 0.2s", textAlign:"left",
+                    }}>
+                    <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"3px"}}>
+                      <span style={{fontSize:"13px"}}>{m.icon}</span>
+                      <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"10px",color: aiModel===m.id ? m.color : "#6a8099"}}>
+                        {m.label}
+                      </span>
+                      {aiModel===m.id && <span style={{marginLeft:"auto",width:"6px",height:"6px",borderRadius:"50%",background:m.color,flexShrink:0}}/>}
+                    </div>
+                    <div style={{fontSize:"9px",color:"#3a5060",lineHeight:"1.4"}}>{m.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="msgs">
               {chatMsgs.length===0 && (
-                <div style={{padding:"12px 0",fontSize:"11px",color:"#3a5060",lineHeight:"1.8",textAlign:"center"}}>
-                  Tanya apapun tentang analisis ini.<br/>
-                  Contoh: "Kenapa WAIT?", "Kapan bisa entry?", "Jelaskan kondisi VMC"
+                <div style={{padding:"16px 0",fontSize:"11px",color:"#3a5060",lineHeight:"1.9",textAlign:"center"}}>
+                  <div style={{fontSize:"20px",marginBottom:"8px"}}>{aiModel==="deepseek"?"🧠":"⚡"}</div>
+                  <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",color: aiModel==="deepseek"?"#00c4ff":"#a080ff",marginBottom:"6px"}}>
+                    {aiModel==="deepseek"?"DeepSeek V4 Pro":"Nous Hermes 2"} siap menjawab
+                  </div>
+                  Contoh: "Kenapa WAIT?", "Kapan bisa entry?",<br/>"Jelaskan kondisi VMC", "Berapa target profit?"
                 </div>
               )}
               {chatMsgs.map((m,i)=>(
                 <div key={i} className={`msg ${m.role}`}>
-                  <div className={`av ${m.role==="assistant"?"av-a":"av-u"}`}>{m.role==="user"?"TM":"AI"}</div>
-                  <div className="mc"><div className="bbl">{m.content}</div></div>
+                  <div className={`av ${m.role==="assistant"?"av-a":"av-u"}`} style={m.role==="assistant"?{background: aiModel==="deepseek"?"linear-gradient(135deg,#00c4ff,#0088ff)":"linear-gradient(135deg,#a080ff,#6040cc)"}:{}}>
+                    {m.role==="user"?"TM": aiModel==="deepseek"?"DS":"NH"}
+                  </div>
+                  <div className="mc">
+                    <div className="bbl">{m.content}</div>
+                    {m.role==="assistant" && (
+                      <div style={{fontSize:"8px",color:"#2a4050",marginTop:"4px",letterSpacing:"0.05em"}}>
+                        {aiModel==="deepseek"?"🧠 DeepSeek V4 Pro":"⚡ Nous Hermes 2"}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
-              {chatLoad && <div className="ldm msg"><div className="av av-a">AI</div><div className="ldd"><div className="ld"/><div className="ld"/><div className="ld"/></div></div>}
+              {chatLoad && (
+                <div className="ldm msg">
+                  <div className="av av-a" style={{background: aiModel==="deepseek"?"linear-gradient(135deg,#00c4ff,#0088ff)":"linear-gradient(135deg,#a080ff,#6040cc)"}}>
+                    {aiModel==="deepseek"?"DS":"NH"}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                    <div className="ldd"><div className="ld"/><div className="ld"/><div className="ld"/></div>
+                    <div style={{fontSize:"9px",color:"#2a4050"}}>{aiModel==="deepseek"?"DeepSeek sedang berpikir…":"Hermes sedang memproses…"}</div>
+                  </div>
+                </div>
+              )}
               <div ref={endRef}/>
             </div>
+
             <div className="inp-a">
               <div className="inp-r">
-                <div className="iw">
-                  <textarea className="ti" placeholder="Tanya tentang analisis ini…" value={manual}
+                <div className="iw" style={{borderColor: aiModel==="deepseek"?"rgba(0,196,255,0.15)":"rgba(160,128,255,0.15)"}}>
+                  <textarea className="ti" placeholder={`Tanya ${aiModel==="deepseek"?"DeepSeek":"Hermes"} tentang analisis ini…`} value={manual}
                     onChange={e=>setManual(e.target.value)}
                     onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();handleChat();}}} rows={1}/>
                 </div>
-                <button className="sb" onClick={handleChat} disabled={!manual.trim()||chatLoad}>
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#080c14" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                <button className="sb" onClick={handleChat} disabled={!manual.trim()||chatLoad}
+                  style={{background: aiModel==="deepseek"?"linear-gradient(135deg,#00c4ff,#0088ff)":"linear-gradient(135deg,#a080ff,#6040cc)"}}>
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                 </button>
               </div>
-              <div className="hint">Tanya tentang hasil analisis · keputusan dibuat otomatis oleh rules 3-layer</div>
+              <div className="hint">Pilih model di atas · ganti model = chat history reset · ENTER untuk kirim</div>
             </div>
           </div>
         )}
