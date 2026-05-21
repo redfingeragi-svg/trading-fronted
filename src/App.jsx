@@ -1192,8 +1192,7 @@ export default function App() {
               <div className="hint">Pilih model di atas · ganti model = chat history reset · ENTER untuk kirim</div>
             </div>
           </div>
-        )}
-      </div>
+        )} 
       </>}
     </>
   );
