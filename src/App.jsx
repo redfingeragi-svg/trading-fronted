@@ -596,16 +596,28 @@ function DemoTrading({ decision, d4 }) {
     if (openPos.length === 0) return;
     const coins = [...new Set(openPos.map(p => p.coin))];
     const fetchPrices = async () => {
-      for (const coin of coins) {
-        try {
-          const r = await fetch(`${BACKEND}/api/demo?action=price&symbol=${coin}`);
-          const d = await r.json();
-          if (d.price) setPrices(prev => ({...prev, [coin]: d.price}));
-        } catch {}
+  // Hanya log jika diperlukan untuk debugging
+  console.log("🔄 Memperbarui harga pasar..."); 
+  
+  for (const coin of coins) {
+    try {
+      // 1. &t=${Date.now()} memaksa browser mengambil data terbaru (Anti-Cache)
+      const url = `${BACKEND}/api/demo?action=price&symbol=${coin}&t=${Date.now()}`;
+      const r = await fetch(url);
+      const d = await r.json();
+      
+      // 2. Jika harga valid, update state
+      if (d && d.price) {
+        console.log(`✅ ${coin}: $${d.price}`); // Visualisasi di Console
+        setPrices(prev => ({ ...prev, [coin]: d.price }));
       }
-    };
+    } catch (err) {
+      console.error(`❌ Gagal update harga ${coin}:`, err);
+    }
+  }
+};
     fetchPrices();
-    priceRef.current = setInterval(fetchPrices, 10000);
+    priceRef.current = setInterval(fetchPrices, 5000);
     return () => clearInterval(priceRef.current);
   }, [positions]);
 
