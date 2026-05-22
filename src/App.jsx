@@ -570,6 +570,356 @@ function DecisionCard({ dec }) {
   );
 }
 
+
+// ── DEMO TRADING COMPONENT ───────────────────────────────────────
+function DemoTrading({ decision, d4 }) {
+  const BACKEND = "https://trading-backend-nu.vercel.app";
+  const [positions, setPositions] = useState([]);
+  const [stats, setStats] = useState({ wins:0, losses:0, winRate:0, totalPnl:0, open:0 });
+  const [patterns, setPatterns] = useState([]);
+  const [aiInsight, setAiInsight] = useState(null);
+  const [prices, setPrices] = useState({});
+  const [openModal, setOpenModal] = useState(false);
+  const [learnLoading, setLearnLoading] = useState(false);
+  const [demoTab, setDemoTab] = useState("open"); // open | history | insight
+  const [form, setForm] = useState({ coin:"BTC", direction:"LONG", size:"100", notes:"" });
+  const priceRef = useRef(null);
+
+  // Load positions on mount
+  useEffect(() => {
+    loadPositions();
+  }, []);
+
+  // Auto-refresh prices every 10s
+  useEffect(() => {
+    const openPos = positions.filter(p => p.status === "open");
+    if (openPos.length === 0) return;
+    const coins = [...new Set(openPos.map(p => p.coin))];
+    const fetchPrices = async () => {
+      for (const coin of coins) {
+        try {
+          const r = await fetch(`${BACKEND}/api/demo?action=price&symbol=${coin}`);
+          const d = await r.json();
+          if (d.price) setPrices(prev => ({...prev, [coin]: d.price}));
+        } catch {}
+      }
+    };
+    fetchPrices();
+    priceRef.current = setInterval(fetchPrices, 10000);
+    return () => clearInterval(priceRef.current);
+  }, [positions]);
+
+  async function loadPositions() {
+    try {
+      const r = await fetch(`${BACKEND}/api/demo?action=list`);
+      const d = await r.json();
+      setPositions(d.positions || []);
+      setStats(d.stats || {});
+      setPatterns(d.patterns || []);
+    } catch {}
+  }
+
+  async function openPosition() {
+    const entry = decision?.setup?.entry || d4?.currentPrice;
+    const sl    = decision?.setup?.sl;
+    const tp    = decision?.setup?.tp;
+    if (!entry) return alert("Lakukan analisis coin dulu");
+
+    const indicators = {
+      maPosition:  d4?.maStatus || "",
+      vmcDot:      d4?.vmc?.dot || "NONE",
+      vmcCircle:   d4?.vmc?.circle || "NONE",
+      moneyFlow:   d4?.vmc?.moneyFlow || 0,
+      inZone:      decision?.layer2?.inLongZone || decision?.layer2?.inShortZone || false,
+      trend4h:     d4?.trendBullish,
+      separation:  d4?.maSeparation,
+    };
+
+    try {
+      const r = await fetch(`${BACKEND}/api/demo?action=open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          coin:             form.coin,
+          direction:        form.direction,
+          size:             parseFloat(form.size),
+          entryPrice:       parseFloat(entry),
+          slPrice:          sl ? parseFloat(sl) : null,
+          tpPrice:          tp ? parseFloat(tp) : null,
+          indicators,
+          signalConfidence: decision?.confidence || 0,
+          notes:            form.notes,
+        }),
+      });
+      const d = await r.json();
+      if (d.success) { setOpenModal(false); loadPositions(); setDemoTab("history"); }
+      else alert(d.error || "Gagal buka posisi");
+    } catch(e) { alert(e.message); }
+  }
+
+  async function closePosition(pos) {
+    const price = prices[pos.coin] || pos.entryPrice;
+    const confirm = window.confirm(`Tutup posisi ${pos.direction} ${pos.coin} @ $${price}?\nEstimasi PnL: ${calcLivePnl(pos, price).pnlPct}%`);
+    if (!confirm) return;
+    try {
+      const r = await fetch(`${BACKEND}/api/demo?action=close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: pos.id, closePrice: price, closedBy: "MANUAL" }),
+      });
+      const d = await r.json();
+      if (d.success) { loadPositions(); }
+    } catch(e) { alert(e.message); }
+  }
+
+  async function runLearn() {
+    setLearnLoading(true);
+    try {
+      const r = await fetch(`${BACKEND}/api/demo?action=learn`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({}) });
+      const d = await r.json();
+      if (d.insight) { setAiInsight(d.insight); setDemoTab("insight"); }
+      loadPositions();
+    } catch(e) { alert(e.message); }
+    finally { setLearnLoading(false); }
+  }
+
+  function calcLivePnl(pos, currentPrice) {
+    const entry = parseFloat(pos.entryPrice);
+    const price = parseFloat(currentPrice || pos.currentPrice || entry);
+    const pnlPct = pos.direction === "LONG" ? ((price-entry)/entry*100) : ((entry-price)/entry*100);
+    const pnlUsd = (pnlPct/100) * parseFloat(pos.size);
+    return { pnlPct: pnlPct.toFixed(3), pnlUsd: pnlUsd.toFixed(2) };
+  }
+
+  const openPos = positions.filter(p => p.status === "open");
+  const closedPos = positions.filter(p => p.status === "closed");
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"#080c14"}}>
+      {/* STATS BAR */}
+      <div style={{padding:"10px 14px",borderBottom:"1px solid rgba(0,255,136,0.1)",background:"rgba(0,0,0,0.3)",display:"flex",gap:"6px",flexWrap:"wrap",alignItems:"center"}}>
+        {[
+          { label:"WIN RATE", value:`${stats.winRate||0}%`, color:"#00ff88" },
+          { label:"W/L", value:`${stats.wins||0}/${stats.losses||0}`, color:"#c8d8e8" },
+          { label:"OPEN", value:stats.open||0, color:"#00c4ff" },
+          { label:"TOTAL PnL", value:`${(stats.totalPnl||0)>=0?"+":""}$${stats.totalPnl||0}`, color:(stats.totalPnl||0)>=0?"#00ff88":"#ff5050" },
+        ].map(s=>(
+          <div key={s.label} style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:"6px",padding:"5px 10px",textAlign:"center",flex:1,minWidth:"60px"}}>
+            <div style={{fontSize:"8px",color:"#3a5060",letterSpacing:"0.08em",marginBottom:"2px"}}>{s.label}</div>
+            <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"12px",color:s.color}}>{s.value}</div>
+          </div>
+        ))}
+        <button onClick={()=>setOpenModal(true)} style={{background:"linear-gradient(135deg,#00ff88,#00c4ff)",border:"none",borderRadius:"8px",padding:"8px 14px",fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"11px",color:"#080c14",cursor:"pointer",whiteSpace:"nowrap"}}>
+          + Open
+        </button>
+      </div>
+
+      {/* SUB TABS */}
+      <div style={{display:"flex",borderBottom:"1px solid rgba(0,255,136,0.08)",background:"rgba(0,0,0,0.2)"}}>
+        {[["open",`📈 Open (${openPos.length})`],["history",`📋 History (${closedPos.length})`],["insight","🧠 AI Insight"]].map(([k,v])=>(
+          <button key={k} style={{flex:1,padding:"8px 4px",fontSize:"9px",fontFamily:"'Syne',sans-serif",fontWeight:"700",letterSpacing:"0.05em",textAlign:"center",cursor:"pointer",color:demoTab===k?"#00ff88":"#3a5060",border:"none",background:"none",borderBottom:demoTab===k?"2px solid #00ff88":"none",transition:"all 0.2s",textTransform:"uppercase"}}
+            onClick={()=>setDemoTab(k)}>{v}</button>
+        ))}
+      </div>
+
+      {/* OPEN POSITIONS */}
+      {demoTab==="open" && (
+        <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:"8px"}}>
+          {openPos.length===0 ? (
+            <div style={{textAlign:"center",padding:"40px 20px",color:"#3a5060",fontSize:"11px",lineHeight:"2"}}>
+              📭 Tidak ada posisi terbuka.<br/>
+              Analisis coin dulu di tab Trading,<br/>lalu klik "+ Open" untuk buka posisi demo.
+            </div>
+          ) : openPos.map(pos => {
+            const livePrice = prices[pos.coin] || pos.entryPrice;
+            const { pnlPct, pnlUsd } = calcLivePnl(pos, livePrice);
+            const isProfit = parseFloat(pnlPct) >= 0;
+            return (
+              <div key={pos.id} style={{background:isProfit?"rgba(0,255,136,0.05)":"rgba(255,80,80,0.05)",border:`1px solid ${isProfit?"rgba(0,255,136,0.2)":"rgba(255,80,80,0.2)"}`,borderRadius:"10px",padding:"12px 13px"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"8px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"14px",color:"#fff"}}>{pos.coin}USDT</span>
+                    <span style={{borderRadius:"5px",padding:"2px 8px",fontSize:"10px",fontWeight:"700",fontFamily:"'Syne',sans-serif",background:pos.direction==="LONG"?"rgba(0,255,136,0.12)":"rgba(255,80,80,0.12)",color:pos.direction==="LONG"?"#00ff88":"#ff5050",border:`1px solid ${pos.direction==="LONG"?"rgba(0,255,136,0.3)":"rgba(255,80,80,0.3)"}`}}>
+                      {pos.direction==="LONG"?"▲ LONG":"▼ SHORT"}
+                    </span>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"14px",color:isProfit?"#00ff88":"#ff5050"}}>{isProfit?"+":""}{pnlPct}%</div>
+                    <div style={{fontSize:"10px",color:isProfit?"#00aa55":"#cc3333"}}>{isProfit?"+":"-"}${Math.abs(pnlUsd)}</div>
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"5px",marginBottom:"8px"}}>
+                  {[["Entry",`$${pos.entryPrice}`,"#c8d8e8"],["Live",`$${livePrice}`,isProfit?"#00ff88":"#ff5050"],["Size",`$${pos.size}`,"#c8d8e8"],["SL",pos.slPrice?`$${pos.slPrice}`:"—","#ff5050"],["TP",pos.tpPrice?`$${pos.tpPrice}`:"—","#00ff88"],["Conf",`${pos.signalConfidence}%`,"#ffb400"]].map(([l,v,c])=>(
+                    <div key={l} style={{background:"rgba(0,0,0,0.2)",borderRadius:"5px",padding:"5px 7px"}}>
+                      <div style={{fontSize:"8px",color:"#3a5060",marginBottom:"2px"}}>{l}</div>
+                      <div style={{fontSize:"10px",fontWeight:"700",color:c}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {pos.notes && <div style={{fontSize:"10px",color:"#4a6060",marginBottom:"8px",lineHeight:"1.4"}}>📝 {pos.notes}</div>}
+                <button onClick={()=>closePosition(pos)} style={{width:"100%",background:"rgba(255,80,80,0.1)",border:"1px solid rgba(255,80,80,0.3)",borderRadius:"7px",padding:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"11px",color:"#ff5050",cursor:"pointer"}}>
+                  ✕ Close Posisi @ ${livePrice}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* HISTORY */}
+      {demoTab==="history" && (
+        <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:"7px"}}>
+          {closedPos.length===0 ? (
+            <div style={{textAlign:"center",padding:"40px 20px",color:"#3a5060",fontSize:"11px",lineHeight:"2"}}>
+              Belum ada posisi yang ditutup.
+            </div>
+          ) : closedPos.map(pos => {
+            const isWin = pos.result === "WIN";
+            const isBe  = pos.result === "BE";
+            return (
+              <div key={pos.id} style={{background:isWin?"rgba(0,255,136,0.04)":isBe?"rgba(255,180,0,0.04)":"rgba(255,80,80,0.04)",border:`1px solid ${isWin?"rgba(0,255,136,0.2)":isBe?"rgba(255,180,0,0.2)":"rgba(255,80,80,0.15)"}`,borderRadius:"9px",padding:"10px 12px"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"6px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"7px"}}>
+                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"13px",color:"#fff"}}>{pos.coin}</span>
+                    <span style={{fontSize:"10px",fontWeight:"700",color:pos.direction==="LONG"?"#00ff88":"#ff5050"}}>{pos.direction==="LONG"?"▲":"▼"} {pos.direction}</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:"7px"}}>
+                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"12px",color:isWin?"#00ff88":isBe?"#ffb400":"#ff5050"}}>{isWin?"✅ WIN":isBe?"⚖️ BE":"❌ LOSS"}</span>
+                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"12px",color:isWin?"#00ff88":isBe?"#ffb400":"#ff5050"}}>{(pos.pnlPct||0)>=0?"+":""}{pos.pnlPct}%</span>
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"4px"}}>
+                  {[["Entry",`$${pos.entryPrice}`],["Close",`$${pos.closePrice}`],["PnL $",`${(pos.pnlUsd||0)>=0?"+":""}$${pos.pnlUsd}`],["By",pos.closedBy||"MANUAL"]].map(([l,v])=>(
+                    <div key={l} style={{fontSize:"9px",color:"#5a7080"}}>
+                      <span style={{color:"#3a5060"}}>{l}: </span>{v}
+                    </div>
+                  ))}
+                </div>
+                {pos.indicators && <div style={{marginTop:"5px",fontSize:"9px",color:"#3a5060",lineHeight:"1.5"}}>
+                  MA: {pos.indicators.maPosition||"?"} | VMC: {pos.indicators.vmcDot||"?"} | MF: {pos.indicators.moneyFlow||"?"} | Zone: {pos.indicators.inZone?"IN":"OUT"}
+                </div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* AI INSIGHT */}
+      {demoTab==="insight" && (
+        <div style={{flex:1,overflowY:"auto",padding:"12px 14px"}}>
+          <button onClick={runLearn} disabled={learnLoading||closedPos.length<3}
+            style={{width:"100%",background:"linear-gradient(135deg,#a080ff,#6040cc)",border:"none",borderRadius:"10px",padding:"12px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"12px",color:"#fff",cursor:learnLoading||closedPos.length<3?"not-allowed":"pointer",opacity:closedPos.length<3?0.5:1,marginBottom:"14px",transition:"all 0.2s"}}>
+            {learnLoading?"🧠 AI Sedang Belajar…":`🧠 Analisis ${closedPos.length} Posisi — Temukan Pattern`}
+          </button>
+
+          {closedPos.length<3 && (
+            <div style={{textAlign:"center",padding:"20px",fontSize:"11px",color:"#3a5060",lineHeight:"1.8"}}>
+              Butuh minimal <strong style={{color:"#ffb400"}}>3 posisi closed</strong> untuk AI belajar.<br/>
+              Sekarang: {closedPos.length} posisi.
+            </div>
+          )}
+
+          {/* PATTERN CARDS */}
+          {patterns.length>0 && (
+            <div style={{marginBottom:"14px"}}>
+              <div style={{fontSize:"9px",color:"#00ff88",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>📊 Pattern Terdeteksi</div>
+              {patterns.slice(0,5).map((p,i)=>(
+                <div key={i} style={{background:p.winRate>=60?"rgba(0,255,136,0.05)":p.winRate<=30?"rgba(255,80,80,0.05)":"rgba(255,180,0,0.04)",border:`1px solid ${p.winRate>=60?"rgba(0,255,136,0.2)":p.winRate<=30?"rgba(255,80,80,0.15)":"rgba(255,180,0,0.15)"}`,borderRadius:"8px",padding:"9px 11px",marginBottom:"6px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
+                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"11px",color:p.winRate>=60?"#00ff88":p.winRate<=30?"#ff5050":"#ffb400"}}>{p.winRate}% WIN RATE</span>
+                    <span style={{fontSize:"9px",color:"#4a6080"}}>{p.count}x trades | avg {p.avgPnl>=0?"+":""}{p.avgPnl}%</span>
+                  </div>
+                  <div style={{fontSize:"9px",color:"#5a7080",lineHeight:"1.6"}}>
+                    {p.direction} | {p.key.split("|").map(k=>k.replace("MA_","").replace("VMC_","VMC:").replace("MF_","MF:").replace("DIR_","").replace("ZONE_","Zone:")).join(" · ")}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* AI INSIGHT RESULT */}
+          {aiInsight && (
+            <div>
+              {aiInsight.insight && (
+                <div style={{background:"rgba(120,80,255,0.06)",border:"1px solid rgba(120,80,255,0.2)",borderRadius:"10px",padding:"12px 14px",marginBottom:"10px"}}>
+                  <div style={{fontSize:"9px",color:"#a080ff",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"6px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>🧠 AI Insight</div>
+                  <div style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.7"}}>{aiInsight.insight}</div>
+                </div>
+              )}
+              {aiInsight.rules && (
+                <div style={{background:"rgba(0,255,136,0.04)",border:"1px solid rgba(0,255,136,0.15)",borderRadius:"10px",padding:"12px 14px",marginBottom:"10px"}}>
+                  <div style={{fontSize:"9px",color:"#00ff88",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>✅ Rules Baru (dari AI)</div>
+                  {(Array.isArray(aiInsight.rules)?aiInsight.rules:[aiInsight.rules]).map((r,i)=>(
+                    <div key={i} style={{display:"flex",gap:"8px",marginBottom:"6px",fontSize:"11px",color:"#8899aa",lineHeight:"1.5"}}>
+                      <span style={{color:"#00ff88",flexShrink:0}}>{i+1}.</span><span>{r}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* OPEN POSITION MODAL */}
+      {openModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:200,display:"flex",alignItems:"flex-end"}} onClick={e=>{if(e.target===e.currentTarget)setOpenModal(false)}}>
+          <div style={{background:"#0d1421",border:"1px solid rgba(0,255,136,0.2)",borderRadius:"16px 16px 0 0",padding:"20px 16px 32px",width:"100%",maxWidth:"600px",margin:"0 auto"}}>
+            <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"15px",color:"#fff",marginBottom:"4px"}}>📈 Buka Posisi Demo</div>
+            <div style={{fontSize:"10px",color:"#4a6080",marginBottom:"16px"}}>
+              {decision?.setup ? `Signal: ${decision.signal} | Entry: $${decision.setup.entry} | SL: $${decision.setup.sl} | TP: $${decision.setup.tp}` : "Isi data posisi manual"}
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"14px"}}>
+              {[["Coin",<input value={form.coin} onChange={e=>setForm(p=>({...p,coin:e.target.value.toUpperCase()}))} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"7px",padding:"8px 10px",color:"#e2e8f0",fontFamily:"Space Mono,monospace",width:"100%",outline:"none",fontSize:"12px"}}/>],
+               ["Size (USD)",<input type="number" value={form.size} onChange={e=>setForm(p=>({...p,size:e.target.value}))} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"7px",padding:"8px 10px",color:"#e2e8f0",fontFamily:"Space Mono,monospace",width:"100%",outline:"none",fontSize:"12px"}}/>]
+              ].map(([l,inp])=>(
+                <div key={l}>
+                  <div style={{fontSize:"8px",color:"#4a6080",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"5px"}}>{l}</div>
+                  {inp}
+                </div>
+              ))}
+            </div>
+
+            <div style={{marginBottom:"12px"}}>
+              <div style={{fontSize:"8px",color:"#4a6080",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"6px"}}>Direction</div>
+              <div style={{display:"flex",gap:"8px"}}>
+                {["LONG","SHORT"].map(d=>(
+                  <button key={d} onClick={()=>setForm(p=>({...p,direction:d}))}
+                    style={{flex:1,padding:"10px",borderRadius:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"12px",cursor:"pointer",border:`1px solid ${form.direction===d?(d==="LONG"?"rgba(0,255,136,0.5)":"rgba(255,80,80,0.5)"):"rgba(255,255,255,0.08)"}`,background:form.direction===d?(d==="LONG"?"rgba(0,255,136,0.12)":"rgba(255,80,80,0.12)"):"rgba(255,255,255,0.03)",color:form.direction===d?(d==="LONG"?"#00ff88":"#ff5050"):"#5a7080",transition:"all 0.2s"}}>
+                    {d==="LONG"?"▲ LONG":"▼ SHORT"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {decision?.setup && (
+              <div style={{background:"rgba(0,196,255,0.06)",border:"1px solid rgba(0,196,255,0.2)",borderRadius:"8px",padding:"10px 12px",marginBottom:"12px",fontSize:"10px",color:"#8899aa",lineHeight:"1.8"}}>
+                <span style={{color:"#00c4ff",fontWeight:"700"}}>Auto dari signal: </span>
+                Entry ${ decision.setup.entry} · SL ${decision.setup.sl} · TP ${decision.setup.tp} · RR 1:3
+              </div>
+            )}
+
+            <div style={{marginBottom:"14px"}}>
+              <div style={{fontSize:"8px",color:"#4a6080",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"5px"}}>Catatan (opsional)</div>
+              <textarea value={form.notes} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} rows={2}
+                placeholder="contoh: entry sesuai signal 3-layer, konfluensi kuat"
+                style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:"7px",padding:"8px 10px",color:"#e2e8f0",fontFamily:"Space Mono,monospace",width:"100%",outline:"none",fontSize:"11px",resize:"none"}}/>
+            </div>
+
+            <div style={{display:"flex",gap:"8px"}}>
+              <button onClick={()=>setOpenModal(false)} style={{flex:1,padding:"11px",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.04)",color:"#6a8099",fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"12px",cursor:"pointer"}}>Batal</button>
+              <button onClick={openPosition} style={{flex:2,padding:"11px",borderRadius:"8px",border:"none",background:"linear-gradient(135deg,#00ff88,#00c4ff)",color:"#080c14",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"12px",cursor:"pointer"}}>
+                📈 Buka Posisi Demo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────
 export default function App() {
   const [coinInput, setCoinInput] = useState("");
@@ -584,7 +934,8 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [chatLoad, setChatLoad] = useState(false);
   const [activeTab, setActiveTab] = useState("signal");
-  const [aiModel, setAiModel] = useState("deepseek"); // "deepseek" | "hermes"
+  const [aiModel, setAiModel] = useState("deepseek");
+  const [activeMainTab, setActiveMainTab] = useState("trading"); // "trading" | "demo"
   const endRef = useRef(null);
 
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMsgs, chatLoad]);
@@ -661,15 +1012,35 @@ export default function App() {
         <div className="hdr">
           <div className="logo">AI</div>
           <div className="hdr-t">
-            <h1>TRADING AGENT — MA × VMC × S&R</h1>
+            <h1>TRADING AGENT — MA × VMC × S{"&"}R</h1>
             <p>BINGX FUTURES LIVE · 3-LAYER DECISION · RR 1:3</p>
           </div>
           <div className="hdr-r">
-            <span className="bdg bdg-p">S&R</span>
+            <span className="bdg bdg-p">S{"&"}R</span>
             <span className="bdg bdg-g">RR 1:3</span>
             <span className="live-i"><span className="dot-l"/>LIVE</span>
           </div>
         </div>
+
+        {/* MAIN TAB SWITCHER */}
+        <div style={{display:"flex",background:"rgba(0,0,0,0.4)",borderBottom:"2px solid rgba(0,255,136,0.15)"}}>
+          {[["trading","📊 Trading Agent"],["demo","🎮 Demo Trading"]].map(([k,v])=>(
+            <button key={k}
+              style={{flex:1,padding:"11px 4px",fontSize:"10px",fontFamily:"'Syne',sans-serif",fontWeight:"800",
+                letterSpacing:"0.06em",textAlign:"center",cursor:"pointer",border:"none",
+                background:activeMainTab===k?"rgba(0,255,136,0.08)":"none",
+                color:activeMainTab===k?"#00ff88":"#3a5060",
+                borderBottom:activeMainTab===k?"2px solid #00ff88":"2px solid transparent",
+                transition:"all 0.2s",textTransform:"uppercase",marginBottom:"-2px"}}
+              onClick={()=>setActiveMainTab(k)}>{v}</button>
+          ))}
+        </div>
+
+        {/* DEMO TRADING TAB */}
+        {activeMainTab==="demo" && <DemoTrading decision={decision} d4={d4}/>}
+
+        {/* TRADING AGENT TAB */}
+        {activeMainTab==="trading" && <>
 
         {/* COIN INPUT */}
         <div className="coin-sec">
@@ -744,8 +1115,8 @@ export default function App() {
               <div style={{fontSize:"8px",color:"#3a5060",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"7px"}}>Pilih AI Assistant</div>
               <div style={{display:"flex",gap:"8px"}}>
                 {[
-                  { id:"deepseek", label:"DeepSeek V4 Pro", icon:"🧠", desc:"Reasoning kuat · $0.001/tanya", color:"#00c4ff" },
-                  { id:"hermes",   label:"Nous Hermes 2",   icon:"⚡", desc:"Gratis · Ultra cepat",          color:"#a080ff" },
+                  { id:"deepseek", label:"DeepSeek V3", icon:"🧠", desc:"Analisis teknikal · Rules-based", color:"#00c4ff" },
+                  { id:"hermes",   label:"Hermes 3",    icon:"🔮", desc:"Natural trader instinct · OpenRouter", color:"#a080ff" },
                 ].map(m=>(
                   <button key={m.id} onClick={()=>{setAiModel(m.id);setChatMsgs([]);setChatHistory([]);}}
                     style={{
@@ -772,21 +1143,24 @@ export default function App() {
                 <div style={{padding:"16px 0",fontSize:"11px",color:"#3a5060",lineHeight:"1.9",textAlign:"center"}}>
                   <div style={{fontSize:"20px",marginBottom:"8px"}}>{aiModel==="deepseek"?"🧠":"⚡"}</div>
                   <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",color: aiModel==="deepseek"?"#00c4ff":"#a080ff",marginBottom:"6px"}}>
-                    {aiModel==="deepseek"?"DeepSeek V4 Pro":"Nous Hermes 2"} siap menjawab
+                    {aiModel==="deepseek"?"DeepSeek V3 — Technical Analyst":"Hermes 3 — Experienced Trader"} siap menjawab
                   </div>
-                  Contoh: "Kenapa WAIT?", "Kapan bisa entry?",<br/>"Jelaskan kondisi VMC", "Berapa target profit?"
+                  {aiModel==="deepseek"
+                    ? <span>Contoh: "Kenapa WAIT?", "Kapan bisa entry?",<br/>"Jelaskan kondisi VMC"</span>
+                    : <span>Tanya perspektif natural:<br/>"Gimana kondisi market ini?", "Layak entry gak?",<br/>"Apa yang kamu lihat dari chart ini?"</span>
+                  }
                 </div>
               )}
               {chatMsgs.map((m,i)=>(
                 <div key={i} className={`msg ${m.role}`}>
                   <div className={`av ${m.role==="assistant"?"av-a":"av-u"}`} style={m.role==="assistant"?{background: aiModel==="deepseek"?"linear-gradient(135deg,#00c4ff,#0088ff)":"linear-gradient(135deg,#a080ff,#6040cc)"}:{}}>
-                    {m.role==="user"?"TM": aiModel==="deepseek"?"DS":"NH"}
+                    {m.role==="user"?"TM": aiModel==="deepseek"?"DS":"H3"}
                   </div>
                   <div className="mc">
                     <div className="bbl">{m.content}</div>
                     {m.role==="assistant" && (
                       <div style={{fontSize:"8px",color:"#2a4050",marginTop:"4px",letterSpacing:"0.05em"}}>
-                        {aiModel==="deepseek"?"🧠 DeepSeek V4 Pro":"⚡ Nous Hermes 2"}
+                        {aiModel==="deepseek"?"🧠 DeepSeek V3":"🔮 Hermes 3"}
                       </div>
                     )}
                   </div>
@@ -799,7 +1173,7 @@ export default function App() {
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
                     <div className="ldd"><div className="ld"/><div className="ld"/><div className="ld"/></div>
-                    <div style={{fontSize:"9px",color:"#2a4050"}}>{aiModel==="deepseek"?"DeepSeek sedang berpikir…":"Hermes sedang memproses…"}</div>
+                    <div style={{fontSize:"9px",color:"#2a4050"}}>{aiModel==="deepseek"?"DeepSeek menganalisis rules…":"Hermes membaca market…"}</div>
                   </div>
                 </div>
               )}
@@ -822,6 +1196,9 @@ export default function App() {
             </div>
           </div>
         )}
+
+      </>}
+
       </div>
     </>
   );
