@@ -652,7 +652,7 @@ function DemoTrading({ decision, d4 }) {
         }),
       });
       const d = await r.json();
-      if (d.success) { setOpenModal(false); loadPositions(); setDemoTab("history"); }
+      if (d.success) { setOpenModal(false); loadPositions(); setDemoTab("open"); }
       else alert(d.error || "Gagal buka posisi");
     } catch(e) { alert(e.message); }
   }
