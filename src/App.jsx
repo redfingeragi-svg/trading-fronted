@@ -618,7 +618,7 @@ function ScreenerTab() {
     if (results.length === 0) return;
     setAiLoading(true); setAiAnalysis(null); setScreenerTab("ai");
     try {
-      const r = await fetch(`${BACKEND_URL}/api/screener`, {
+      const r = await fetch(`${BACKEND_URL}/api/screener-ai`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ results, model: aiModel }),
       });
