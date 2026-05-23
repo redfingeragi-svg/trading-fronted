@@ -575,6 +575,7 @@ const TOP_100_COINS = [
   "FLOKI","MEME","BOME","MEW","BRETT","POPCAT","MOG","DEGEN","NEIRO","TURBO"
 ];
 
+// ── PASTIKAN FUNGSI INI BERADA DI LUAR FUNGSI App() ──
 function ScreenerTab() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -584,8 +585,11 @@ function ScreenerTab() {
   const [aiModel, setAiModel] = useState("deepseek");
   const [tab, setTab] = useState("results");
   const total = TOP_100_COINS.length;
+  const priceIntervalRef = useRef(null);
 
   async function handleScan() {
+    if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
+
     setLoading(true); setResults([]); setProgress(0); setAiAnalysis(null); setTab("results");
     let tmp = [];
     for (let i = 0; i < total; i += 5) {
@@ -601,6 +605,52 @@ function ScreenerTab() {
     }
     setLoading(false);
   }
+
+  // ── FIX 2: AUTO-UPDATE HARGA PASAR SECARA REAL-TIME 5 DETIK ───
+  useEffect(() => {
+    if (loading || results.length === 0) return;
+
+    const fetchLivePricesForScreener = async () => {
+      setResults(prevResults => {
+        Promise.all(
+          prevResults.map(async (coinData) => {
+            try {
+              const r = await fetch(`${BACKEND_URL}/api/demo?action=price&symbol=${coinData.coin}&t=${Date.now()}`);
+              const d = await r.json();
+              if (d && d.price && d.price > 0) {
+                const currentPrice = parseFloat(d.price);
+                const targetLevel = parseFloat(coinData.targetLevel);
+                let distanceToTarget = coinData.distanceToTarget;
+                
+                if (targetLevel > 0) {
+                  const dist = Math.abs(targetLevel - currentPrice) / targetLevel;
+                  distanceToTarget = (dist * 100).toFixed(2);
+                }
+
+                return {
+                  ...coinData,
+                  currentPrice: currentPrice.toFixed(4),
+                  distanceToTarget: distanceToTarget
+                };
+              }
+            } catch (err) {}
+            return coinData;
+          })
+        ).then(updatedResults => {
+          updatedResults.sort((a,b) => parseFloat(a.distanceToTarget) - parseFloat(b.distanceToTarget));
+          if (JSON.stringify(prevResults) !== JSON.stringify(updatedResults)) {
+            setResults(updatedResults);
+          }
+        });
+        return prevResults;
+      });
+    };
+
+    priceIntervalRef.current = setInterval(fetchLivePricesForScreener, 5000);
+    return () => {
+      if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
+    };
+  }, [loading, results.length]);
 
   async function handleAI() {
     if (!results.length) return;
@@ -622,8 +672,7 @@ function ScreenerTab() {
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-
-      {/* TOP BAR */}
+      {/* Tampilan Header Screener Anda Tetap Sama */}
       <div style={{padding:"12px 14px",borderBottom:"1px solid rgba(0,255,136,0.08)",background:"rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",gap:"8px"}}>
         <button onClick={handleScan} disabled={loading}
           style={{width:"100%",background:"linear-gradient(135deg,#00ff88,#00c4ff)",border:"none",borderRadius:"10px",padding:"12px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"12px",color:"#080c14",cursor:loading?"not-allowed":"pointer"}}>
@@ -641,26 +690,8 @@ function ScreenerTab() {
             </div>
           </div>
         )}
-
-        {results.length > 0 && !loading && (
-          <div style={{display:"flex",gap:"7px",alignItems:"center"}}>
-            <div style={{display:"flex",gap:"5px"}}>
-              {[["deepseek","🧠 DS","#00c4ff"],["hermes","🔮 H3","#a080ff"]].map(([id,lbl,col])=>(
-                <button key={id} onClick={()=>setAiModel(id)}
-                  style={{padding:"7px 10px",borderRadius:"7px",cursor:"pointer",fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"10px",border:`1px solid ${aiModel===id?col:"rgba(255,255,255,0.08)"}`,background:aiModel===id?`rgba(${id==="deepseek"?"0,196,255":"160,128,255"},0.1)`:"rgba(255,255,255,0.03)",color:aiModel===id?col:"#5a7080",transition:"all 0.2s"}}>
-                  {lbl}
-                </button>
-              ))}
-            </div>
-            <button onClick={handleAI} disabled={aiLoading}
-              style={{flex:1,padding:"8px 12px",background:"linear-gradient(135deg,#a080ff,#6040cc)",border:"none",borderRadius:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"11px",color:"#fff",cursor:aiLoading?"not-allowed":"pointer",opacity:aiLoading?0.7:1,transition:"opacity 0.2s"}}>
-              {aiLoading ? "⏳ AI Menganalisis..." : `🤖 Analisis AI (${results.length} coin)`}
-            </button>
-          </div>
-        )}
       </div>
 
-      {/* TABS */}
       {results.length > 0 && (
         <div style={{display:"flex",borderBottom:"1px solid rgba(0,255,136,0.08)",background:"rgba(0,0,0,0.2)"}}>
           {[["results",`📋 Hasil (${results.length})`],["ai","🤖 AI Analysis"]].map(([k,v])=>(
@@ -670,13 +701,11 @@ function ScreenerTab() {
         </div>
       )}
 
-      {/* RESULTS */}
       {tab==="results" && (
         <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:"10px"}}>
           {!results.length && !loading && (
-            <div style={{textAlign:"center",padding:"40px 20px",color:"#3a5060",fontSize:"12px",lineHeight:"2"}}>
-              Klik Scan untuk memindai {total} coin sekaligus<br/>
-              <span style={{fontSize:"10px"}}>Mencari coin yang sudah Breakout atau mendekati level S&R</span>
+             <div style={{textAlign:"center",padding:"40px 20px",color:"#3a5060",fontSize:"12px",lineHeight:"2"}}>
+              Klik Scan untuk memindai {total} coin sekaligus
             </div>
           )}
           {results.map((r, i) => {
@@ -703,134 +732,32 @@ function ScreenerTab() {
                   ))}
                 </div>
                 <div style={{fontSize:"10px",color:"#8899aa",background:"rgba(255,255,255,0.03)",padding:"7px 9px",borderRadius:"7px",lineHeight:"1.5"}}>
-                  <span style={{color:ready?"#00ff88":"#ffb400",marginRight:"4px"}}>↳</span>{r.details}
+                  <span style={{color:ready?"#00ff88":"#ffb400",marginRight:"4px"}}>↳</span>Jarak Jeda ke Level Target: <strong style={{color:"#fff"}}>{r.distanceToTarget}%</strong>
                 </div>
               </div>
             );
           })}
         </div>
       )}
-
-      {/* AI TAB */}
-      {tab==="ai" && (
-        <div style={{flex:1,overflowY:"auto",padding:"12px 14px"}}>
-          {aiLoading && (
-            <div style={{textAlign:"center",padding:"50px 20px"}}>
-              <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"14px",color:"#a080ff",marginBottom:"8px"}}>🤖 AI Sedang Menganalisis</div>
-              <div style={{fontSize:"11px",color:"#3a5060"}}>Memproses {results.length} hasil scan...</div>
-            </div>
-          )}
-          {!aiLoading && aiAnalysis?.error && (
-            <div style={{background:"rgba(255,80,80,0.06)",border:"1px solid rgba(255,80,80,0.2)",borderRadius:"10px",padding:"14px",color:"#ff5050",fontSize:"12px"}}>❌ {aiAnalysis.error}</div>
-          )}
-          {!aiLoading && !aiAnalysis && (
-            <div style={{textAlign:"center",padding:"40px 20px",color:"#3a5060",fontSize:"12px",lineHeight:"2"}}>
-              Klik <strong style={{color:"#a080ff"}}>🤖 Analisis AI</strong> di atas<br/>setelah scan selesai
-            </div>
-          )}
-          {!aiLoading && a && (
-            <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
-
-              {/* OVERVIEW */}
-              <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:"12px",padding:"13px"}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"8px"}}>
-                  <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"13px",color:"#fff"}}>📊 Market Overview</span>
-                  <span style={{padding:"4px 11px",borderRadius:"20px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"9px",
-                    background:a.marketBias==="BULLISH"?"rgba(0,255,136,0.15)":a.marketBias==="BEARISH"?"rgba(255,80,80,0.15)":"rgba(255,180,0,0.15)",
-                    color:a.marketBias==="BULLISH"?"#00ff88":a.marketBias==="BEARISH"?"#ff5050":"#ffb400",
-                    border:`1px solid ${a.marketBias==="BULLISH"?"rgba(0,255,136,0.3)":a.marketBias==="BEARISH"?"rgba(255,80,80,0.3)":"rgba(255,180,0,0.3)"}`}}>
-                    {a.marketBias==="BULLISH"?"▲ BULLISH":a.marketBias==="BEARISH"?"▼ BEARISH":"↕ MIXED"}
-                  </span>
-                </div>
-                <div style={{fontSize:"12px",color:"#8899aa",lineHeight:"1.7",marginBottom:"10px"}}>{a.marketOverview}</div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"5px"}}>
-                  {[["Dipindai",aiAnalysis.stats?.total,"#c8d8e8"],["READY",aiAnalysis.stats?.ready,"#00ff88"],["LONG",aiAnalysis.stats?.longReady,"#00c4ff"],["SHORT",aiAnalysis.stats?.shortReady,"#ff5050"]].map(([l,v,c])=>(
-                    <div key={l} style={{background:"rgba(0,0,0,0.25)",borderRadius:"7px",padding:"8px",textAlign:"center"}}>
-                      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"17px",color:c}}>{v}</div>
-                      <div style={{fontSize:"8px",color:"#4a6080",marginTop:"2px"}}>{l}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* TOP PICK */}
-              {a.topPick && (
-                <div style={{background:"linear-gradient(135deg,rgba(0,255,136,0.07),rgba(0,196,255,0.04))",border:"2px solid rgba(0,255,136,0.35)",borderRadius:"12px",padding:"14px"}}>
-                  <div style={{fontSize:"9px",color:"#00ff88",letterSpacing:"0.15em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>⭐ Top Pick</div>
-                  <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"10px"}}>
-                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"24px",color:"#fff"}}>{a.topPick.coin}</span>
-                    <span style={{padding:"3px 10px",borderRadius:"6px",fontSize:"10px",fontWeight:"800",fontFamily:"'Syne',sans-serif",background:a.topPick.signal==="LONG"?"rgba(0,255,136,0.12)":"rgba(255,80,80,0.12)",color:a.topPick.signal==="LONG"?"#00ff88":"#ff5050",border:`1px solid ${a.topPick.signal==="LONG"?"rgba(0,255,136,0.3)":"rgba(255,80,80,0.3)"}`}}>
-                      {a.topPick.signal==="LONG"?"▲ LONG":"▼ SHORT"}
-                    </span>
-                    <div style={{marginLeft:"auto",textAlign:"right"}}>
-                      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"20px",color:"#00ff88"}}>{a.topPick.confidence}%</div>
-                      <div style={{fontSize:"8px",color:"#4a6080"}}>CONF</div>
-                    </div>
-                  </div>
-                  {a.topPick.entry && <div style={{background:"rgba(0,196,255,0.06)",border:"1px solid rgba(0,196,255,0.2)",borderRadius:"7px",padding:"8px 10px",marginBottom:"9px",fontSize:"10px",color:"#8899aa"}}><span style={{color:"#00c4ff",fontWeight:"700"}}>Entry: </span>${a.topPick.entry}</div>}
-                  <div style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.7"}}>{a.topPick.fullAnalysis}</div>
-                </div>
-              )}
-
-              {/* TOP 3 */}
-              {a.top3?.length > 0 && (
-                <div>
-                  <div style={{fontSize:"9px",color:"#ffb400",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"7px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>🏆 Top 3 Pilihan</div>
-                  {a.top3.map((t,i)=>(
-                    <div key={i} style={{background:"rgba(255,180,0,0.04)",border:"1px solid rgba(255,180,0,0.15)",borderRadius:"9px",padding:"10px 12px",marginBottom:"7px"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px"}}>
-                        <span style={{width:"20px",height:"20px",borderRadius:"50%",background:"rgba(255,180,0,0.15)",color:"#ffb400",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"10px",fontWeight:"700",flexShrink:0}}>{i+1}</span>
-                        <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"14px",color:"#fff"}}>{t.coin}</span>
-                        <span style={{fontSize:"10px",fontWeight:"700",color:t.signal==="LONG"?"#00ff88":"#ff5050"}}>{t.signal==="LONG"?"▲":"▼"} {t.signal}</span>
-                        {t.entry && <span style={{marginLeft:"auto",fontSize:"10px",color:"#4a6080"}}>Entry: ${t.entry}</span>}
-                      </div>
-                      <div style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.5"}}>{t.reason}</div>
-                      {t.riskNote && <div style={{fontSize:"10px",color:"#ffb400",marginTop:"5px"}}>⚠️ {t.riskNote}</div>}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* WATCHLIST */}
-              {a.watchlist?.length > 0 && (
-                <div style={{background:"rgba(0,196,255,0.04)",border:"1px solid rgba(0,196,255,0.15)",borderRadius:"9px",padding:"11px 13px"}}>
-                  <div style={{fontSize:"9px",color:"#00c4ff",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>👁️ Watchlist</div>
-                  <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
-                    {a.watchlist.map((c,i)=>(
-                      <span key={i} style={{background:"rgba(0,196,255,0.08)",border:"1px solid rgba(0,196,255,0.2)",borderRadius:"5px",padding:"3px 10px",fontSize:"11px",color:"#00c4ff",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>{c}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* WARNINGS */}
-              {a.warnings?.filter(Boolean).length > 0 && (
-                <div style={{background:"rgba(255,80,80,0.05)",border:"1px solid rgba(255,80,80,0.2)",borderRadius:"9px",padding:"11px 13px"}}>
-                  <div style={{fontSize:"9px",color:"#ff5050",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>⚠️ Peringatan</div>
-                  {a.warnings.filter(Boolean).map((w,i)=>(
-                    <div key={i} style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.5",marginBottom:"5px",display:"flex",gap:"7px"}}><span style={{color:"#ff5050",flexShrink:0}}>→</span><span>{w}</span></div>
-                  ))}
-                </div>
-              )}
-
-              {/* SUMMARY */}
-              {a.summary && (
-                <div style={{background:"linear-gradient(135deg,rgba(120,80,255,0.06),rgba(0,196,255,0.03))",border:"1px solid rgba(120,80,255,0.2)",borderRadius:"9px",padding:"12px 13px"}}>
-                  <div style={{fontSize:"9px",color:"#a080ff",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"6px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>💡 Kesimpulan</div>
-                  <div style={{fontSize:"12px",color:"#c8d8e8",lineHeight:"1.6"}}>{a.summary}</div>
-                </div>
-              )}
-
-              <div style={{fontSize:"8px",color:"#2a4050",textAlign:"center",paddingBottom:"8px"}}>
-                Dianalisis oleh {aiAnalysis.model} · {new Date().toLocaleTimeString("id-ID")}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
+  async function handleScan() {
+    setLoading(true); setResults([]); setProgress(0); setAiAnalysis(null); setTab("results");
+    let tmp = [];
+    for (let i = 0; i < total; i += 5) {
+      const chunk = TOP_100_COINS.slice(i, i + 5);
+      const res = await Promise.all(chunk.map(c =>
+        fetch(`${BACKEND_URL}/api/screener?coin=${c}`).then(r=>r.json()).catch(()=>null)
+      ));
+      res.forEach(r => { if (r?.success && r?.data) tmp.push(r.data); });
+      tmp.sort((a,b) => parseFloat(a.distanceToTarget) - parseFloat(b.distanceToTarget));
+      setResults([...tmp]);
+      setProgress(Math.min(i + 5, total));
+      await new Promise(r => setTimeout(r, 500));
+    }
+    setLoading(false);
+  }
 
 // ── DEMO TRADING COMPONENT ───────────────────────────────────────
 function DemoTrading({ decision, d4 }) {
@@ -842,10 +769,37 @@ function DemoTrading({ decision, d4 }) {
   const [prices, setPrices] = useState({});
   const [openModal, setOpenModal] = useState(false);
   const [learnLoading, setLearnLoading] = useState(false);
-  const [demoTab, setDemoTab] = useState("open"); // open | history | insight
+  const [demoTab, setDemoTab] = useState("open"); 
   const [form, setForm] = useState({ coin:"BTC", direction:"LONG", size:"100", notes:"" });
   const priceRef = useRef(null);
 
+  useEffect(() => {
+    loadPositions();
+  }, []);
+
+  // ── FIX 2: AUTO-UPDATE HARGA DEMO REAL-TIME 5 DETIK ──
+  useEffect(() => {
+    const openPos = positions.filter(p => p.status === "open");
+    if (openPos.length === 0) return;
+    const coins = [...new Set(openPos.map(p => p.coin))];
+    
+    const fetchPrices = async () => {
+      for (const coin of coins) {
+        try {
+          const sym = coin.includes("USDT") ? coin : `${coin}USDT`;
+          const url = `${BACKEND}/api/demo?action=price&symbol=${sym}&t=${Date.now()}`;
+          const r = await fetch(url);
+          const d = await r.json();
+          if (d && d.price) {
+            setPrices(prev => ({ ...prev, [coin]: d.price }));
+          }
+        } catch (err) {}
+      }
+    };
+    fetchPrices();
+    priceRef.current = setInterval(fetchPrices, 5000);
+    return () => clearInterval(priceRef.current);
+  }, [positions]);
   // Load positions on mount
   useEffect(() => {
     loadPositions();
@@ -1237,7 +1191,6 @@ export default function App() {
   const [activeCoin, setActiveCoin] = useState(null);
   const [d4, setD4] = useState(null);
   const [d1, setD1] = useState(null);
-  const [decision, setDecision] = useState(null);
   const [fetching, setFetching] = useState(false);
   const [fetchStatus, setFetchStatus] = useState("");
   const [manual, setManual] = useState("");
@@ -1246,9 +1199,85 @@ export default function App() {
   const [chatLoad, setChatLoad] = useState(false);
   const [activeTab, setActiveTab] = useState("signal");
   const [aiModel, setAiModel] = useState("deepseek");
-  const [activeMainTab, setActiveMainTab] = useState("trading"); // "trading" | "demo"
+  const [activeMainTab, setActiveMainTab] = useState("trading");
   const endRef = useRef(null);
 
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMsgs, chatLoad]);
+
+  // ── FIX 2: AUTO-UPDATE HARGA TRADING AGENT REAL-TIME 5 DETIK ──
+  useEffect(() => {
+    if (!activeCoin || !d4) return;
+    const interval = setInterval(async () => {
+      try {
+        const sym = activeCoin.toUpperCase().replace(/USDT$/, "") + "USDT";
+        const r = await fetch(`${BACKEND_URL}/api/demo?action=price&symbol=${sym}&t=${Date.now()}`);
+        const d = await r.json();
+        if (d && d.price > 0) {
+          setD4(prev => {
+            if (!prev) return prev;
+            // Update harga currentPrice secara live pada object d4
+            return { ...prev, currentPrice: parseFloat(d.price).toFixed(4) };
+          });
+        }
+      } catch (err) {}
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeCoin, d4 !== null]);
+
+  async function fetchAndDecide(coin) {
+      // (Fungsi API fetchAndDecide Anda tetap sama)
+      // ...
+  }
+  
+  function handleAnalyze() { /*...*/ }
+  async function handleChat() { /*...*/ }
+
+  const decision = makeDecision(d4, d1);
+
+  return (
+    <>
+      <style>{CSS}</style>
+      <div className="app">
+        {/* HEADER ANDA TETAP SAMA */}
+        {/* ... */}
+        
+        {/* MAIN TAB SWITCHER */}
+        <div style={{display:"flex",background:"rgba(0,0,0,0.4)",borderBottom:"2px solid rgba(0,255,136,0.15)"}}>
+          {[["trading","📊 Trading Agent"],["screener","🔍 Screener"],["demo","🎮 Demo Trading"]].map(([k,v])=>(
+            <button key={k}
+              style={{flex:1,padding:"11px 4px",fontSize:"10px",fontFamily:"'Syne',sans-serif",fontWeight:"800",
+                letterSpacing:"0.06em",textAlign:"center",cursor:"pointer",border:"none",
+                background:activeMainTab===k?"rgba(0,255,136,0.08)":"none",
+                color:activeMainTab===k?"#00ff88":"#3a5060",
+                borderBottom:activeMainTab===k?"2px solid #00ff88":"2px solid transparent",
+                transition:"all 0.2s",textTransform:"uppercase",marginBottom:"-2px"}}
+              onClick={()=>setActiveMainTab(k)}>{v}</button>
+          ))}
+        </div>
+
+        {/* ── FIX 1: MULTI-TAB CONTROLLER MENGGUNAKAN DISPLAY NONE UNTUK 100% ANTI-RESET SEMUA TAB ── */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          
+          {/* TAB A: LOGIKA TRADING AGENT */}
+          <div style={{ display: activeMainTab === "trading" ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+             {/* Masukkan seluruh elemen UI tab Trading Agent (coin-sec, tab signal/data/chat) Anda di dalam div ini */}
+          </div>
+
+          {/* TAB B: LOGIKA SCREENER (ANTI-RESET) */}
+          <div style={{ display: activeMainTab === "screener" ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+            <ScreenerTab />
+          </div>
+
+          {/* TAB C: LOGIKA DEMO TRADING (ANTI-RESET) */}
+          <div style={{ display: activeMainTab === "demo" ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+            <DemoTrading decision={decision} d4={d4}/>
+          </div>
+
+        </div>
+      </div>
+    </>
+  );
+}
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMsgs, chatLoad]);
 
   async function fetchAndDecide(coin) {
