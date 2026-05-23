@@ -2,15 +2,12 @@ import { useState, useEffect, useRef } from "react";
 
 const BACKEND_URL = "https://trading-backend-nu.vercel.app";
 
-// ── KEPUTUSAN DETERMINISTIK — 3-Layer + Entry Presisi ───────────
+// ── KEPUTUSAN DETERMINISTIK — BREAKOUT STRATEGY ────────────────
 function makeDecision(d4, d1) {
   if (!d4 || !d1) return null;
+  const cp = parseFloat(d4.currentPrice);
 
-  const ez  = d4.entryZone;
-  const cp  = parseFloat(d4.currentPrice);
-  const sr  = d4.sr;
-
-  // ── LAYER 1: TREND (MA13/21 + VuManChu 4H) ───────────────────
+  // ── LAYER 1: TREND (TIDAK BERUBAH) ───────────────────────────
   const trend4h  = d4.trendBullish;
   const trend1h  = d1.trendBullish;
   const vmcBull4 = d4.vmc.bullish || d4.vmc.moneyFlow > 0;
@@ -19,173 +16,110 @@ function makeDecision(d4, d1) {
   const ranging  = sep4h < 0.05;
   const l1Long   = trend4h && vmcBull4;
   const l1Short  = !trend4h && vmcBear4;
-
-  // Confluence 4H + 1H
   const conf4h1hLong  = trend4h && trend1h && vmcBull4;
   const conf4h1hShort = !trend4h && !trend1h && vmcBear4;
 
-  // ── LAYER 2: S&R ZONE CHECK ───────────────────────────────────
-  const inLongZone  = ez?.long?.inZone  ?? false;
-  const inShortZone = ez?.short?.inZone ?? false;
+  // ── LAYER 2: S&R TERKUAT dari candle history ─────────────────
+  const c1 = (d1.candles || []).slice(-72);
+  const c4 = (d4.candles || []).slice(-60);
+  const highs = [...c1.map(c => c.high), ...c4.map(c => c.high)];
+  const lows  = [...c1.map(c => c.low),  ...c4.map(c => c.low)];
+  const strongestResistance = highs.length ? Math.max(...highs) : null;
+  const strongestSupport    = lows.length  ? Math.min(...lows)  : null;
 
-  // ── LAYER 3: ENTRY PRESISI + SL/TP (RR 1:3 acuan 4H) ─────────
-  // LOGIKA ENTRY:
-  // LONG:  entry = support_terkuat × 1.01~1.02 (1-2% DI ATAS support)
-  //        SL    = support_terkuat × 0.98 (2% DI BAWAH support)
-  //        TP    = entry + (entry - SL) × 3
-  //
-  // SHORT: entry = resistance_terkuat × 0.98~0.99 (1-2% DI BAWAH resistance)
-  //        SL    = resistance_terkuat × 1.02 (2% DI ATAS resistance)
-  //        TP    = entry - (SL - entry) × 3
+  // Volume confirmation
+  const volCandles   = (d1.candles || []).slice(-21, -1);
+  const currentVol   = d1.candles?.[d1.candles.length - 1]?.volume || 0;
+  const smaVol20     = volCandles.length ? volCandles.reduce((a,b) => a + b.volume, 0) / volCandles.length : 0;
+  const volumeValid  = currentVol > smaVol20;
 
-  // Cari support terkuat dari 4H (support terdekat di bawah harga)
-  const supportLevels    = (sr?.supportLevels || []).map(s => parseFloat(s)).filter(s => s < cp).sort((a,b) => b-a);
-  const resistanceLevels = (sr?.resistanceLevels || []).map(r => parseFloat(r)).filter(r => r > cp).sort((a,b) => a-b);
+  // ── LAYER 3: BREAKOUT DETECTION ──────────────────────────────
+  const isBreakoutLong   = strongestResistance && cp > strongestResistance;
+  const isBreakdownShort = strongestSupport    && cp < strongestSupport;
 
-  const strongestSupport    = supportLevels[0] || null;    // support terdekat dari bawah
-  const strongestResistance = resistanceLevels[0] || null; // resistance terdekat dari atas
-
-  // Hitung jarak harga ke S&R dalam %
-  const distToSupport    = strongestSupport    ? ((cp - strongestSupport) / strongestSupport * 100)    : null;
-  const distToResistance = strongestResistance ? ((strongestResistance - cp) / cp * 100) : null;
-
-  // LONG setup — entry 1-2% di atas support terkuat
   let longSetup = null;
-  if (strongestSupport) {
-    // Entry ideal: 1.5% di atas support (tengah antara 1-2%)
-    const entryIdeal = parseFloat((strongestSupport * 1.015).toFixed(2));
-    // Gunakan harga saat ini jika sudah dalam range 1-2% di atas support
-    const entryLong  = (distToSupport >= 1.0 && distToSupport <= 2.5)
-                       ? parseFloat(cp.toFixed(2))
-                       : entryIdeal;
-    const sl         = parseFloat((strongestSupport * 0.98).toFixed(2));  // 2% bawah support
-    const risk       = parseFloat((entryLong - sl).toFixed(2));
-    const tp         = parseFloat((entryLong + risk * 3).toFixed(2));     // RR 1:3
-    const entryPct   = ((entryLong - strongestSupport) / strongestSupport * 100).toFixed(2);
+  if (isBreakoutLong) {
+    const sl = parseFloat((strongestResistance * 0.985).toFixed(4));
+    const risk = parseFloat((cp - sl).toFixed(4));
+    const tp = parseFloat((cp + risk * 3).toFixed(4));
     longSetup = {
-      entry:        entryLong.toFixed(2),
-      sl:           sl.toFixed(2),
-      tp:           tp.toFixed(2),
-      risk:         risk.toFixed(2),
-      reward:       (risk * 3).toFixed(2),
-      rrCalc:       `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
-      supportLevel: strongestSupport.toFixed(2),
-      entryNote:    `${entryPct}% di atas support $${strongestSupport.toFixed(2)}`,
-      distFromCurrent: distToSupport?.toFixed(2),
-      inRange:      distToSupport !== null && distToSupport >= 1.0 && distToSupport <= 2.5,
+      entry: cp.toFixed(4), sl: sl.toFixed(4), tp: tp.toFixed(4),
+      risk: risk.toFixed(2), reward: (risk*3).toFixed(2),
+      rrCalc: `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
+      resistanceLevel: strongestResistance.toFixed(4),
+      supportLevel: strongestSupport?.toFixed(4),
+      entryNote: `Breakout Resistance $${strongestResistance.toFixed(2)}`,
     };
   }
-
-  // SHORT setup — entry 1-2% di bawah resistance terkuat
   let shortSetup = null;
-  if (strongestResistance) {
-    // Entry ideal: 1.5% di bawah resistance (tengah antara 1-2%)
-    const entryIdeal = parseFloat((strongestResistance * 0.985).toFixed(2));
-    // Gunakan harga saat ini jika sudah dalam range 1-2% di bawah resistance
-    const entryShort = (distToResistance >= 1.0 && distToResistance <= 2.5)
-                       ? parseFloat(cp.toFixed(2))
-                       : entryIdeal;
-    const sl          = parseFloat((strongestResistance * 1.02).toFixed(2)); // 2% atas resistance
-    const risk        = parseFloat((sl - entryShort).toFixed(2));
-    const tp          = parseFloat((entryShort - risk * 3).toFixed(2));      // RR 1:3
-    const entryPct    = ((strongestResistance - entryShort) / strongestResistance * 100).toFixed(2);
+  if (isBreakdownShort) {
+    const sl = parseFloat((strongestSupport * 1.015).toFixed(4));
+    const risk = parseFloat((sl - cp).toFixed(4));
+    const tp = parseFloat((cp - risk * 3).toFixed(4));
     shortSetup = {
-      entry:             entryShort.toFixed(2),
-      sl:                sl.toFixed(2),
-      tp:                tp.toFixed(2),
-      risk:              risk.toFixed(2),
-      reward:            (risk * 3).toFixed(2),
-      rrCalc:            `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
-      resistanceLevel:   strongestResistance.toFixed(2),
-      entryNote:         `${entryPct}% di bawah resistance $${strongestResistance.toFixed(2)}`,
-      distFromCurrent:   distToResistance?.toFixed(2),
-      inRange:           distToResistance !== null && distToResistance >= 1.0 && distToResistance <= 2.5,
+      entry: cp.toFixed(4), sl: sl.toFixed(4), tp: tp.toFixed(4),
+      risk: risk.toFixed(2), reward: (risk*3).toFixed(2),
+      rrCalc: `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
+      supportLevel: strongestSupport.toFixed(4),
+      resistanceLevel: strongestResistance?.toFixed(4),
+      entryNote: `Breakdown Support $${strongestSupport.toFixed(2)}`,
     };
   }
 
   // ── FINAL DECISION ────────────────────────────────────────────
-  let signal     = "WAIT";
-  let setup      = null;
-  let reasons    = [];
-  let waitReasons = [];
-  let confidence  = 0;
+  let signal = "WAIT", setup = null, reasons = [], waitReasons = [], confidence = 0;
 
   if (ranging) {
-    waitReasons.push(`MA separation hanya ${sep4h}% — market RANGING, sinyal tidak valid`);
-
-  } else if (l1Long && inLongZone && longSetup?.inRange) {
-    // LONG — semua 3 layer terpenuhi
-    signal     = "LONG";
-    setup      = longSetup;
-    confidence = conf4h1hLong ? 88 : 72;
+    waitReasons.push(`MA separation ${sep4h}% — market RANGING, tunggu trending`);
+  } else if (l1Long && isBreakoutLong && volumeValid) {
+    signal = "LONG"; setup = longSetup; confidence = conf4h1hLong ? 88 : 72;
     reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
-    reasons.push(`✅ L2: Harga $${cp} dalam zona LONG — ${ez.long.distancePct} dari support`);
-    reasons.push(`✅ L3 ENTRY: $${longSetup.entry} (${longSetup.entryNote})`);
-    reasons.push(`✅ L3 SL: $${longSetup.sl} — 2% di bawah support $${longSetup.supportLevel}`);
-    reasons.push(`✅ L3 TP: $${longSetup.tp} — RR 1:3 (Risk $${longSetup.risk} → Reward $${longSetup.reward})`);
-    if (conf4h1hLong) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H sama-sama BULLISH`);
+    reasons.push(`✅ L2: Resistance terkuat $${strongestResistance.toFixed(2)} | Support $${strongestSupport?.toFixed(2)}`);
+    reasons.push(`✅ L3 BREAKOUT: Harga $${cp} menembus Resistance $${strongestResistance.toFixed(2)}`);
+    reasons.push(`✅ VOLUME: ${currentVol.toFixed(2)} > SMA20 ${smaVol20.toFixed(2)}`);
+    reasons.push(`✅ ENTRY: $${longSetup.entry} | SL: $${longSetup.sl} | TP: $${longSetup.tp}`);
+    if (conf4h1hLong) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H BULLISH`);
     else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
-
-  } else if (l1Short && inShortZone && shortSetup?.inRange) {
-    // SHORT — semua 3 layer terpenuhi
-    signal     = "SHORT";
-    setup      = shortSetup;
-    confidence = conf4h1hShort ? 88 : 72;
+  } else if (l1Short && isBreakdownShort && volumeValid) {
+    signal = "SHORT"; setup = shortSetup; confidence = conf4h1hShort ? 88 : 72;
     reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
-    reasons.push(`✅ L2: Harga $${cp} dalam zona SHORT — ${ez.short.distancePct} ke resistance`);
-    reasons.push(`✅ L3 ENTRY: $${shortSetup.entry} (${shortSetup.entryNote})`);
-    reasons.push(`✅ L3 SL: $${shortSetup.sl} — 2% di atas resistance $${shortSetup.resistanceLevel}`);
-    reasons.push(`✅ L3 TP: $${shortSetup.tp} — RR 1:3 (Risk $${shortSetup.risk} → Reward $${shortSetup.reward})`);
-    if (conf4h1hShort) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H sama-sama BEARISH`);
+    reasons.push(`✅ L2: Support terkuat $${strongestSupport.toFixed(2)} | Resistance $${strongestResistance?.toFixed(2)}`);
+    reasons.push(`✅ L3 BREAKDOWN: Harga $${cp} menembus Support $${strongestSupport.toFixed(2)}`);
+    reasons.push(`✅ VOLUME: ${currentVol.toFixed(2)} > SMA20 ${smaVol20.toFixed(2)}`);
+    reasons.push(`✅ ENTRY: $${shortSetup.entry} | SL: $${shortSetup.sl} | TP: $${shortSetup.tp}`);
+    if (conf4h1hShort) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H BEARISH`);
     else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
-
   } else {
-    // WAIT — breakdown layer mana yang gagal
-    if (!l1Long && !l1Short) {
-      waitReasons.push(`L1 GAGAL: Trend ${trend4h?"BULLISH":"BEARISH"} + VMC ${d4.vmc.dot} + MF ${d4.vmc.moneyFlow} — tidak ada sinyal valid`);
+    if (!l1Long && !l1Short)
+      waitReasons.push(`L1: Trend ${trend4h?"BULLISH":"BEARISH"} + VMC ${d4.vmc.dot} — sinyal lemah`);
+    if (l1Long && !isBreakoutLong) {
+      const gap = strongestResistance ? ((strongestResistance - cp)/cp*100).toFixed(2) : "?";
+      waitReasons.push(`L3: Belum BREAKOUT — butuh naik ${gap}% ke resistance $${strongestResistance?.toFixed(2)}`);
     }
-    if (l1Long && !inLongZone) {
-      const target = ez?.long?.entryZoneMin;
-      const dist   = target ? ((cp - parseFloat(target)) / parseFloat(target) * 100).toFixed(1) : "?";
-      waitReasons.push(`L2 GAGAL LONG: Harga $${cp} belum di zona. Tunggu turun ke zona $${ez?.long?.entryZoneMin}–$${ez?.long?.entryZoneMax} (${dist}% lagi)`);
+    if (l1Short && !isBreakdownShort) {
+      const gap = strongestSupport ? ((cp - strongestSupport)/strongestSupport*100).toFixed(2) : "?";
+      waitReasons.push(`L3: Belum BREAKDOWN — butuh turun ${gap}% ke support $${strongestSupport?.toFixed(2)}`);
     }
-    if (l1Short && !inShortZone) {
-      const target = ez?.short?.entryZoneMax;
-      const dist   = target ? ((parseFloat(target) - cp) / cp * 100).toFixed(1) : "?";
-      waitReasons.push(`L2 GAGAL SHORT: Harga $${cp} belum di zona. Tunggu naik ke zona $${ez?.short?.entryZoneMin}–$${ez?.short?.entryZoneMax} (${dist}% lagi)`);
-    }
-    if (l1Long && inLongZone && longSetup && !longSetup.inRange) {
-      waitReasons.push(`L3 GAGAL LONG: Harga $${cp} dalam zona tapi terlalu jauh dari support. Butuh 1-2% di atas $${longSetup.supportLevel} (sekarang ${longSetup.distFromCurrent}%)`);
-    }
-    if (l1Short && inShortZone && shortSetup && !shortSetup.inRange) {
-      waitReasons.push(`L3 GAGAL SHORT: Harga $${cp} dalam zona tapi terlalu jauh dari resistance. Butuh 1-2% di bawah $${shortSetup.resistanceLevel} (sekarang ${shortSetup.distFromCurrent}%)`);
-    }
-    if (!strongestSupport && !strongestResistance) {
-      waitReasons.push("L3 GAGAL: Tidak ada level S&R terdeteksi dari data 100 candle 4H");
-    }
-    if (waitReasons.length === 0) {
-      waitReasons.push("Kondisi belum memenuhi semua 3 layer secara bersamaan");
-    }
+    if ((l1Long && isBreakoutLong && !volumeValid) || (l1Short && isBreakdownShort && !volumeValid))
+      waitReasons.push(`VOLUME RENDAH: ${currentVol.toFixed(2)} < SMA20 ${smaVol20.toFixed(2)} — risiko fakeout`);
+    if (!waitReasons.length) waitReasons.push("Kondisi belum memenuhi semua layer");
   }
 
-  // Info: berapa % harga ke S&R terdekat
   const priceContext = [];
-  if (strongestSupport)    priceContext.push(`Support terkuat: $${strongestSupport.toFixed(2)} (${distToSupport?.toFixed(2)}% di bawah harga)`);
-  if (strongestResistance) priceContext.push(`Resistance terkuat: $${strongestResistance.toFixed(2)} (${distToResistance?.toFixed(2)}% di atas harga)`);
+  if (strongestSupport)    priceContext.push(`Support terkuat: $${strongestSupport.toFixed(2)}`);
+  if (strongestResistance) priceContext.push(`Resistance terkuat: $${strongestResistance.toFixed(2)}`);
+  priceContext.push(`Volume: ${currentVol.toFixed(2)} (SMA20: ${smaVol20.toFixed(2)})`);
 
   return {
     signal, confidence, setup, reasons, waitReasons, priceContext,
     layer1: { trend4h, trend1h, vmcBull4, vmcBear4, ranging, sep4h, l1Long, l1Short },
-    layer2: { inLongZone, inShortZone, longZone: ez?.long, shortZone: ez?.short },
-    layer3: { longSetup, shortSetup, strongestSupport, strongestResistance },
+    layer2: { strongestSupport, strongestResistance, currentVol, smaVol20, volumeValid,
+              inLongZone: isBreakoutLong, inShortZone: isBreakdownShort },
+    layer3: { isBreakoutLong, isBreakdownShort, longSetup, shortSetup },
     confluence: conf4h1hLong || conf4h1hShort,
-    sr: d4.sr,
-    price: cp,
-    pair: d4.pair,
-    timestamp: d4.timestamp,
+    sr: d4.sr, price: cp, pair: d4.pair, timestamp: d4.timestamp,
   };
 }
-
 const POPULAR = ["BTC","ETH","SOL","BNB","XRP","DOGE","ADA","AVAX","DOT","MATIC","LINK","LTC","ATOM","UNI","APT"];
 
 function fmt(n, d=4) {
@@ -571,18 +505,19 @@ function DecisionCard({ dec }) {
 }
 
 
-// ── KOMPONEN SCREENER TAB ──────────────────────────────────────────────────────
+
+// ── SCREENER ─────────────────────────────────────────────────────
 const TOP_100_COINS = [
-  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", 
-  "HYPE", "LTC", "NEAR", "OP", "ARB", "INJ", "RNDR", "APT", "SUI", "SEI", 
-  "FET", "GALA", "SAND", "MANA", "FTM", "WLD", "TIA", "PEPE", "SHIB", "BCH", 
-  "ETC", "FIL", "ICP", "STX", "IMX", "GRT", "SNX", "MKR", "AAVE", "LDO", 
-  "RUNE", "QNT", "ALGO", "EGLD", "AXS", "THETA", "KAS", "ORDI", "1000SATS", "BONK", 
-  "WIF", "JUP", "PYTH", "DYM", "MANTA", "ALT", "STRK", "PIXEL", "PORTAL", "AEVO", 
-  "ETHFI", "ENA", "W", "TNSR", "OMNI", "REZ", "BB", "NOT", "IO", "ZK", 
-  "ZRO", "BLAST", "RENDER", "TON", "TRX", "XLM", "XMR", "VET", "AR", "HBAR", 
-  "MNT", "CRO", "ONDO", "PENDLE", "JTO", "CORE", "FLR", "KAVA", "GMX", "CFX", 
-  "FLOKI", "MEME", "BOME", "MEW", "BRETT", "POPCAT", "MOG", "DEGEN", "NEIRO", "TURBO"
+  "BTC","ETH","SOL","BNB","XRP","DOGE","ADA","AVAX","LINK","DOT",
+  "HYPE","LTC","NEAR","OP","ARB","INJ","RNDR","APT","SUI","SEI",
+  "FET","GALA","SAND","MANA","FTM","WLD","TIA","PEPE","SHIB","BCH",
+  "ETC","FIL","ICP","STX","IMX","GRT","SNX","MKR","AAVE","LDO",
+  "RUNE","QNT","ALGO","EGLD","AXS","THETA","KAS","ORDI","1000SATS","BONK",
+  "WIF","JUP","PYTH","DYM","MANTA","ALT","STRK","PIXEL","PORTAL","AEVO",
+  "ETHFI","ENA","W","TNSR","OMNI","REZ","BB","NOT","IO","ZK",
+  "ZRO","BLAST","RENDER","TON","TRX","XLM","XMR","VET","AR","HBAR",
+  "MNT","CRO","ONDO","PENDLE","JTO","CORE","FLR","KAVA","GMX","CFX",
+  "FLOKI","MEME","BOME","MEW","BRETT","POPCAT","MOG","DEGEN","NEIRO","TURBO"
 ];
 
 function ScreenerTab() {
@@ -592,102 +527,107 @@ function ScreenerTab() {
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiModel, setAiModel] = useState("deepseek");
-  const [screenerTab, setScreenerTab] = useState("results");
-  const totalCoins = TOP_100_COINS.length;
+  const [tab, setTab] = useState("results");
+  const total = TOP_100_COINS.length;
 
-  const handleScan = async () => {
-    setLoading(true); setResults([]); setProgress(0); setAiAnalysis(null);
-    let tempResults = [];
-    const CHUNK_SIZE = 5;
-    for(let i=0; i < totalCoins; i += CHUNK_SIZE) {
-      const chunk = TOP_100_COINS.slice(i, i + CHUNK_SIZE);
-      const promises = chunk.map(coin =>
-        fetch(`${BACKEND_URL}/api/screener?coin=${coin}`).then(r => r.json()).catch(() => null)
-      );
-      const responses = await Promise.all(promises);
-      responses.forEach(res => { if(res && res.success && res.data) tempResults.push(res.data); });
-      tempResults.sort((a, b) => parseFloat(a.distanceToTarget) - parseFloat(b.distanceToTarget));
-      setResults([...tempResults]);
-      setProgress(Math.min(i + CHUNK_SIZE, totalCoins));
-      await new Promise(resolve => setTimeout(resolve, 500));
+  async function handleScan() {
+    setLoading(true); setResults([]); setProgress(0); setAiAnalysis(null); setTab("results");
+    let tmp = [];
+    for (let i = 0; i < total; i += 5) {
+      const chunk = TOP_100_COINS.slice(i, i + 5);
+      const res = await Promise.all(chunk.map(c =>
+        fetch(`${BACKEND_URL}/api/screener?coin=${c}`).then(r=>r.json()).catch(()=>null)
+      ));
+      res.forEach(r => { if (r?.success && r?.data) tmp.push(r.data); });
+      tmp.sort((a,b) => parseFloat(a.distanceToTarget) - parseFloat(b.distanceToTarget));
+      setResults([...tmp]);
+      setProgress(Math.min(i + 5, total));
+      await new Promise(r => setTimeout(r, 500));
     }
     setLoading(false);
-  };
+  }
 
-  const handleAiAnalysis = async () => {
-    if (results.length === 0) return;
-    setAiLoading(true); setAiAnalysis(null); setScreenerTab("ai");
+  async function handleAI() {
+    if (!results.length) return;
+    setAiLoading(true); setAiAnalysis(null); setTab("ai");
     try {
       const r = await fetch(`${BACKEND_URL}/api/screener-ai`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: {"Content-Type":"application/json"},
         body: JSON.stringify({ results, model: aiModel }),
       });
       const d = await r.json();
-      if (d.error) throw new Error(d.error);
-      setAiAnalysis(d);
+      setAiAnalysis(d.error ? { error: d.error } : d);
     } catch(e) { setAiAnalysis({ error: e.message }); }
     finally { setAiLoading(false); }
-  };
+  }
 
-  const progressPct = ((progress / totalCoins) * 100).toFixed(0);
-  const readyCount = results.filter(r => r.status === "READY").length;
+  const pct = ((progress/total)*100).toFixed(0);
+  const readyCount = results.filter(r=>r.status==="READY").length;
   const a = aiAnalysis?.analysis;
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      {/* ACTION BAR */}
-      <div style={{padding:"12px 14px",borderBottom:"1px solid rgba(0,255,136,0.08)",background:"rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",gap:"8px"}}>
+
+      {/* TOP BAR */}
+      <div style={{padding:"12px 14px",borderBottom:"1px solid rgba(0,255,136,0.08)",background:"rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",gap:"8px"}}>
         <button onClick={handleScan} disabled={loading}
           style={{width:"100%",background:"linear-gradient(135deg,#00ff88,#00c4ff)",border:"none",borderRadius:"10px",padding:"12px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"12px",color:"#080c14",cursor:loading?"not-allowed":"pointer"}}>
-          {loading ? `⏳ Memindai... ${progress}/${totalCoins}` : `🔍 Scan ${totalCoins} Coin`}
+          {loading ? `⏳ Memindai... ${progress}/${total} (${pct}%)` : `🔍 Scan ${total} Coin Sekarang`}
         </button>
+
         {(loading || progress > 0) && (
           <div>
             <div style={{width:"100%",height:"3px",background:"rgba(255,255,255,0.08)",borderRadius:"2px",overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${progressPct}%`,background:"linear-gradient(90deg,#00ff88,#00c4ff)",transition:"width 0.4s ease"}}/>
+              <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#00ff88,#00c4ff)",transition:"width 0.3s"}}/>
             </div>
-            <div style={{fontSize:"9px",color:"#4a6080",marginTop:"3px",textAlign:"right"}}>{progressPct}% · {readyCount} READY ditemukan</div>
+            <div style={{fontSize:"9px",color:"#4a6080",marginTop:"3px",display:"flex",justifyContent:"space-between"}}>
+              <span>{progress}/{total} coin dipindai</span>
+              <span style={{color:"#00ff88"}}>{readyCount} READY ditemukan</span>
+            </div>
           </div>
         )}
+
         {results.length > 0 && !loading && (
           <div style={{display:"flex",gap:"7px",alignItems:"center"}}>
-            <div style={{display:"flex",gap:"5px",flex:1}}>
-              {[["deepseek","🧠 DS"],["hermes","🔮 H3"]].map(([id,label])=>(
+            <div style={{display:"flex",gap:"5px"}}>
+              {[["deepseek","🧠 DS","#00c4ff"],["hermes","🔮 H3","#a080ff"]].map(([id,lbl,col])=>(
                 <button key={id} onClick={()=>setAiModel(id)}
-                  style={{flex:1,padding:"7px",borderRadius:"7px",border:`1px solid ${aiModel===id?(id==="deepseek"?"rgba(0,196,255,0.5)":"rgba(160,128,255,0.5)"):"rgba(255,255,255,0.08)"}`,background:aiModel===id?(id==="deepseek"?"rgba(0,196,255,0.1)":"rgba(160,128,255,0.1)"):"rgba(255,255,255,0.03)",color:aiModel===id?(id==="deepseek"?"#00c4ff":"#a080ff"):"#5a7080",fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"10px",cursor:"pointer"}}>
-                  {label}
+                  style={{padding:"7px 10px",borderRadius:"7px",cursor:"pointer",fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"10px",border:`1px solid ${aiModel===id?col:"rgba(255,255,255,0.08)"}`,background:aiModel===id?`rgba(${id==="deepseek"?"0,196,255":"160,128,255"},0.1)`:"rgba(255,255,255,0.03)",color:aiModel===id?col:"#5a7080",transition:"all 0.2s"}}>
+                  {lbl}
                 </button>
               ))}
             </div>
-            <button onClick={handleAiAnalysis} disabled={aiLoading}
-              style={{flex:2,padding:"8px 12px",background:"linear-gradient(135deg,#a080ff,#6040cc)",border:"none",borderRadius:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"11px",color:"#fff",cursor:aiLoading?"not-allowed":"pointer",opacity:aiLoading?0.7:1}}>
-              {aiLoading ? "⏳ AI Menganalisis..." : `🤖 Analisis AI (${results.length})`}
+            <button onClick={handleAI} disabled={aiLoading}
+              style={{flex:1,padding:"8px 12px",background:"linear-gradient(135deg,#a080ff,#6040cc)",border:"none",borderRadius:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"11px",color:"#fff",cursor:aiLoading?"not-allowed":"pointer",opacity:aiLoading?0.7:1,transition:"opacity 0.2s"}}>
+              {aiLoading ? "⏳ AI Menganalisis..." : `🤖 Analisis AI (${results.length} coin)`}
             </button>
           </div>
         )}
       </div>
 
+      {/* TABS */}
       {results.length > 0 && (
         <div style={{display:"flex",borderBottom:"1px solid rgba(0,255,136,0.08)",background:"rgba(0,0,0,0.2)"}}>
           {[["results",`📋 Hasil (${results.length})`],["ai","🤖 AI Analysis"]].map(([k,v])=>(
-            <button key={k} style={{flex:1,padding:"8px",fontSize:"9px",fontFamily:"'Syne',sans-serif",fontWeight:"700",textAlign:"center",cursor:"pointer",color:screenerTab===k?"#00ff88":"#3a5060",border:"none",background:"none",borderBottom:screenerTab===k?"2px solid #00ff88":"none",textTransform:"uppercase",transition:"all 0.2s"}}
-              onClick={()=>setScreenerTab(k)}>{v}</button>
+            <button key={k} style={{flex:1,padding:"8px",fontSize:"9px",fontFamily:"'Syne',sans-serif",fontWeight:"700",textAlign:"center",cursor:"pointer",color:tab===k?"#00ff88":"#3a5060",border:"none",background:"none",borderBottom:tab===k?"2px solid #00ff88":"none",textTransform:"uppercase",transition:"all 0.2s"}}
+              onClick={()=>setTab(k)}>{v}</button>
           ))}
         </div>
       )}
 
-      {/* RESULTS TAB */}
-      {screenerTab==="results" && (
+      {/* RESULTS */}
+      {tab==="results" && (
         <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:"10px"}}>
-          {results.length === 0 && !loading && (
+          {!results.length && !loading && (
             <div style={{textAlign:"center",padding:"40px 20px",color:"#3a5060",fontSize:"12px",lineHeight:"2"}}>
-              Klik tombol Scan untuk memindai {totalCoins} coin sekaligus
+              Klik Scan untuk memindai {total} coin sekaligus<br/>
+              <span style={{fontSize:"10px"}}>Mencari coin yang sudah Breakout atau mendekati level S&R</span>
             </div>
           )}
           {results.map((r, i) => {
-            const isReady = r.status === "READY";
+            const ready = r.status === "READY";
             return (
-              <div key={i} style={{background:isReady?"rgba(0,255,136,0.06)":"rgba(255,180,0,0.05)",border:`1px solid ${isReady?"rgba(0,255,136,0.3)":"rgba(255,180,0,0.2)"}`,borderRadius:"12px",padding:"13px",animation:"fadeUp 0.3s ease"}}>
+              <div key={i} style={{background:ready?"rgba(0,255,136,0.06)":"rgba(255,180,0,0.05)",border:`1px solid ${ready?"rgba(0,255,136,0.3)":"rgba(255,180,0,0.2)"}`,borderRadius:"12px",padding:"13px"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"9px"}}>
                   <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                     <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"15px",color:"#fff"}}>{r.coin}</span>
@@ -695,22 +635,20 @@ function ScreenerTab() {
                       {r.signal==="LONG"?"▲ LONG":"▼ SHORT"}
                     </span>
                   </div>
-                  <div style={{background:isReady?"rgba(0,255,136,0.15)":"rgba(255,180,0,0.15)",color:isReady?"#00ff88":"#ffb400",padding:"3px 9px",borderRadius:"6px",fontSize:"9px",fontWeight:"800",fontFamily:"'Syne',sans-serif"}}>
-                    {isReady ? "🎯 READY" : "👁️ WATCH"}
+                  <div style={{background:ready?"rgba(0,255,136,0.15)":"rgba(255,180,0,0.12)",color:ready?"#00ff88":"#ffb400",padding:"3px 9px",borderRadius:"6px",fontSize:"9px",fontWeight:"800",fontFamily:"'Syne',sans-serif"}}>
+                    {ready?"🎯 READY":"👁️ WATCH"}
                   </div>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px"}}>
-                  <div style={{background:"rgba(0,0,0,0.2)",padding:"7px 9px",borderRadius:"7px"}}>
-                    <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"3px"}}>Harga</div>
-                    <div style={{fontSize:"13px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:"#e2e8f0"}}>${r.currentPrice}</div>
-                  </div>
-                  <div style={{background:"rgba(0,0,0,0.2)",padding:"7px 9px",borderRadius:"7px"}}>
-                    <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"3px"}}>Target Level</div>
-                    <div style={{fontSize:"13px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:r.signal==="LONG"?"#00c4ff":"#ff7070"}}>${r.targetLevel}</div>
-                  </div>
+                  {[["Harga",`$${r.currentPrice}`,"#e2e8f0"],["Target",`$${r.targetLevel}`,r.signal==="LONG"?"#00c4ff":"#ff7070"]].map(([l,v,c])=>(
+                    <div key={l} style={{background:"rgba(0,0,0,0.2)",padding:"7px 9px",borderRadius:"7px"}}>
+                      <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"3px"}}>{l}</div>
+                      <div style={{fontSize:"13px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:c}}>{v}</div>
+                    </div>
+                  ))}
                 </div>
                 <div style={{fontSize:"10px",color:"#8899aa",background:"rgba(255,255,255,0.03)",padding:"7px 9px",borderRadius:"7px",lineHeight:"1.5"}}>
-                  <span style={{color:isReady?"#00ff88":"#ffb400",marginRight:"4px"}}>↳</span>{r.details}
+                  <span style={{color:ready?"#00ff88":"#ffb400",marginRight:"4px"}}>↳</span>{r.details}
                 </div>
               </div>
             );
@@ -718,13 +656,13 @@ function ScreenerTab() {
         </div>
       )}
 
-      {/* AI ANALYSIS TAB */}
-      {screenerTab==="ai" && (
+      {/* AI TAB */}
+      {tab==="ai" && (
         <div style={{flex:1,overflowY:"auto",padding:"12px 14px"}}>
           {aiLoading && (
-            <div style={{textAlign:"center",padding:"40px 20px"}}>
-              <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",color:"#a080ff",fontSize:"13px",marginBottom:"8px"}}>🤖 AI Sedang Menganalisis...</div>
-              <div style={{fontSize:"11px",color:"#3a5060"}}>Memproses {results.length} coin dari hasil scan</div>
+            <div style={{textAlign:"center",padding:"50px 20px"}}>
+              <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"700",fontSize:"14px",color:"#a080ff",marginBottom:"8px"}}>🤖 AI Sedang Menganalisis</div>
+              <div style={{fontSize:"11px",color:"#3a5060"}}>Memproses {results.length} hasil scan...</div>
             </div>
           )}
           {!aiLoading && aiAnalysis?.error && (
@@ -732,27 +670,28 @@ function ScreenerTab() {
           )}
           {!aiLoading && !aiAnalysis && (
             <div style={{textAlign:"center",padding:"40px 20px",color:"#3a5060",fontSize:"12px",lineHeight:"2"}}>
-              🤖 Klik <strong style={{color:"#a080ff"}}>Analisis AI</strong> untuk mendapat insight dari hasil scan
+              Klik <strong style={{color:"#a080ff"}}>🤖 Analisis AI</strong> di atas<br/>setelah scan selesai
             </div>
           )}
           {!aiLoading && a && (
-            <div style={{display:"flex",flexDirection:"column",gap:"12px"}}>
+            <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+
               {/* OVERVIEW */}
               <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:"12px",padding:"13px"}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"8px"}}>
-                  <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"13px",color:"#fff"}}>📊 Market Overview</div>
-                  <div style={{padding:"4px 12px",borderRadius:"20px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"10px",
+                  <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"13px",color:"#fff"}}>📊 Market Overview</span>
+                  <span style={{padding:"4px 11px",borderRadius:"20px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"9px",
                     background:a.marketBias==="BULLISH"?"rgba(0,255,136,0.15)":a.marketBias==="BEARISH"?"rgba(255,80,80,0.15)":"rgba(255,180,0,0.15)",
                     color:a.marketBias==="BULLISH"?"#00ff88":a.marketBias==="BEARISH"?"#ff5050":"#ffb400",
                     border:`1px solid ${a.marketBias==="BULLISH"?"rgba(0,255,136,0.3)":a.marketBias==="BEARISH"?"rgba(255,80,80,0.3)":"rgba(255,180,0,0.3)"}`}}>
                     {a.marketBias==="BULLISH"?"▲ BULLISH":a.marketBias==="BEARISH"?"▼ BEARISH":"↕ MIXED"}
-                  </div>
+                  </span>
                 </div>
                 <div style={{fontSize:"12px",color:"#8899aa",lineHeight:"1.7",marginBottom:"10px"}}>{a.marketOverview}</div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"5px"}}>
                   {[["Dipindai",aiAnalysis.stats?.total,"#c8d8e8"],["READY",aiAnalysis.stats?.ready,"#00ff88"],["LONG",aiAnalysis.stats?.longReady,"#00c4ff"],["SHORT",aiAnalysis.stats?.shortReady,"#ff5050"]].map(([l,v,c])=>(
-                    <div key={l} style={{background:"rgba(0,0,0,0.2)",borderRadius:"7px",padding:"7px",textAlign:"center"}}>
-                      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"16px",color:c}}>{v}</div>
+                    <div key={l} style={{background:"rgba(0,0,0,0.25)",borderRadius:"7px",padding:"8px",textAlign:"center"}}>
+                      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"17px",color:c}}>{v}</div>
                       <div style={{fontSize:"8px",color:"#4a6080",marginTop:"2px"}}>{l}</div>
                     </div>
                   ))}
@@ -761,19 +700,19 @@ function ScreenerTab() {
 
               {/* TOP PICK */}
               {a.topPick && (
-                <div style={{background:"linear-gradient(135deg,rgba(0,255,136,0.07),rgba(0,196,255,0.04))",border:"2px solid rgba(0,255,136,0.3)",borderRadius:"12px",padding:"14px"}}>
+                <div style={{background:"linear-gradient(135deg,rgba(0,255,136,0.07),rgba(0,196,255,0.04))",border:"2px solid rgba(0,255,136,0.35)",borderRadius:"12px",padding:"14px"}}>
                   <div style={{fontSize:"9px",color:"#00ff88",letterSpacing:"0.15em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>⭐ Top Pick</div>
                   <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"10px"}}>
-                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"22px",color:"#fff"}}>{a.topPick.coin}</span>
+                    <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"24px",color:"#fff"}}>{a.topPick.coin}</span>
                     <span style={{padding:"3px 10px",borderRadius:"6px",fontSize:"10px",fontWeight:"800",fontFamily:"'Syne',sans-serif",background:a.topPick.signal==="LONG"?"rgba(0,255,136,0.12)":"rgba(255,80,80,0.12)",color:a.topPick.signal==="LONG"?"#00ff88":"#ff5050",border:`1px solid ${a.topPick.signal==="LONG"?"rgba(0,255,136,0.3)":"rgba(255,80,80,0.3)"}`}}>
                       {a.topPick.signal==="LONG"?"▲ LONG":"▼ SHORT"}
                     </span>
                     <div style={{marginLeft:"auto",textAlign:"right"}}>
-                      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"18px",color:"#00ff88"}}>{a.topPick.confidence}%</div>
-                      <div style={{fontSize:"8px",color:"#4a6080"}}>CONFIDENCE</div>
+                      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"20px",color:"#00ff88"}}>{a.topPick.confidence}%</div>
+                      <div style={{fontSize:"8px",color:"#4a6080"}}>CONF</div>
                     </div>
                   </div>
-                  {a.topPick.entry && <div style={{background:"rgba(0,196,255,0.06)",border:"1px solid rgba(0,196,255,0.2)",borderRadius:"7px",padding:"8px 10px",marginBottom:"8px",fontSize:"10px",color:"#8899aa"}}><span style={{color:"#00c4ff",fontWeight:"700"}}>Entry: </span>${a.topPick.entry}</div>}
+                  {a.topPick.entry && <div style={{background:"rgba(0,196,255,0.06)",border:"1px solid rgba(0,196,255,0.2)",borderRadius:"7px",padding:"8px 10px",marginBottom:"9px",fontSize:"10px",color:"#8899aa"}}><span style={{color:"#00c4ff",fontWeight:"700"}}>Entry: </span>${a.topPick.entry}</div>}
                   <div style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.7"}}>{a.topPick.fullAnalysis}</div>
                 </div>
               )}
@@ -781,7 +720,7 @@ function ScreenerTab() {
               {/* TOP 3 */}
               {a.top3?.length > 0 && (
                 <div>
-                  <div style={{fontSize:"9px",color:"#ffb400",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>🏆 Top 3</div>
+                  <div style={{fontSize:"9px",color:"#ffb400",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"7px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>🏆 Top 3 Pilihan</div>
                   {a.top3.map((t,i)=>(
                     <div key={i} style={{background:"rgba(255,180,0,0.04)",border:"1px solid rgba(255,180,0,0.15)",borderRadius:"9px",padding:"10px 12px",marginBottom:"7px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px"}}>
@@ -791,13 +730,13 @@ function ScreenerTab() {
                         {t.entry && <span style={{marginLeft:"auto",fontSize:"10px",color:"#4a6080"}}>Entry: ${t.entry}</span>}
                       </div>
                       <div style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.5"}}>{t.reason}</div>
-                      {t.riskNote && <div style={{fontSize:"10px",color:"#ffb400",marginTop:"4px"}}>⚠️ {t.riskNote}</div>}
+                      {t.riskNote && <div style={{fontSize:"10px",color:"#ffb400",marginTop:"5px"}}>⚠️ {t.riskNote}</div>}
                     </div>
                   ))}
                 </div>
               )}
 
-              {/* WATCHLIST + WARNINGS */}
+              {/* WATCHLIST */}
               {a.watchlist?.length > 0 && (
                 <div style={{background:"rgba(0,196,255,0.04)",border:"1px solid rgba(0,196,255,0.15)",borderRadius:"9px",padding:"11px 13px"}}>
                   <div style={{fontSize:"9px",color:"#00c4ff",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>👁️ Watchlist</div>
@@ -808,21 +747,28 @@ function ScreenerTab() {
                   </div>
                 </div>
               )}
-              {a.warnings?.filter(w=>w).length > 0 && (
+
+              {/* WARNINGS */}
+              {a.warnings?.filter(Boolean).length > 0 && (
                 <div style={{background:"rgba(255,80,80,0.05)",border:"1px solid rgba(255,80,80,0.2)",borderRadius:"9px",padding:"11px 13px"}}>
                   <div style={{fontSize:"9px",color:"#ff5050",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"8px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>⚠️ Peringatan</div>
-                  {a.warnings.filter(w=>w).map((w,i)=>(
-                    <div key={i} style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.5",marginBottom:"5px",display:"flex",gap:"6px"}}><span style={{color:"#ff5050",flexShrink:0}}>→</span><span>{w}</span></div>
+                  {a.warnings.filter(Boolean).map((w,i)=>(
+                    <div key={i} style={{fontSize:"11px",color:"#8899aa",lineHeight:"1.5",marginBottom:"5px",display:"flex",gap:"7px"}}><span style={{color:"#ff5050",flexShrink:0}}>→</span><span>{w}</span></div>
                   ))}
                 </div>
               )}
+
+              {/* SUMMARY */}
               {a.summary && (
                 <div style={{background:"linear-gradient(135deg,rgba(120,80,255,0.06),rgba(0,196,255,0.03))",border:"1px solid rgba(120,80,255,0.2)",borderRadius:"9px",padding:"12px 13px"}}>
                   <div style={{fontSize:"9px",color:"#a080ff",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:"6px",fontFamily:"'Syne',sans-serif",fontWeight:"700"}}>💡 Kesimpulan</div>
                   <div style={{fontSize:"12px",color:"#c8d8e8",lineHeight:"1.6"}}>{a.summary}</div>
                 </div>
               )}
-              <div style={{fontSize:"8px",color:"#2a4050",textAlign:"center",paddingBottom:"8px"}}>Dianalisis oleh {aiAnalysis.model}</div>
+
+              <div style={{fontSize:"8px",color:"#2a4050",textAlign:"center",paddingBottom:"8px"}}>
+                Dianalisis oleh {aiAnalysis.model} · {new Date().toLocaleTimeString("id-ID")}
+              </div>
             </div>
           )}
         </div>
@@ -1296,7 +1242,7 @@ export default function App() {
 
         {/* MAIN TAB SWITCHER */}
         <div style={{display:"flex",background:"rgba(0,0,0,0.4)",borderBottom:"2px solid rgba(0,255,136,0.15)"}}>
-          {[["trading","📊 Trading Agent"],["demo","🎮 Demo Trading"]].map(([k,v])=>(
+          {[["trading","📊 Trading Agent"],["screener","🔍 Screener"],["demo","🎮 Demo Trading"]].map(([k,v])=>(
             <button key={k}
               style={{flex:1,padding:"11px 4px",fontSize:"10px",fontFamily:"'Syne',sans-serif",fontWeight:"800",
                 letterSpacing:"0.06em",textAlign:"center",cursor:"pointer",border:"none",
@@ -1307,6 +1253,9 @@ export default function App() {
               onClick={()=>setActiveMainTab(k)}>{v}</button>
           ))}
         </div>
+
+        {/* SCREENER TAB */}
+        {activeMainTab==="screener" && <ScreenerTab />}
 
         {/* DEMO TRADING TAB */}
         {activeMainTab==="demo" && <DemoTrading decision={decision} d4={d4}/>}
