@@ -575,7 +575,7 @@ const TOP_100_COINS = [
   "FLOKI","MEME","BOME","MEW","BRETT","POPCAT","MOG","DEGEN","NEIRO","TURBO"
 ];
 
-function ScreenerTab() {
+function ScreenerTab({ globalPrices = {}, onResultsChange }) {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -584,6 +584,11 @@ function ScreenerTab() {
   const [aiModel, setAiModel] = useState("deepseek");
   const [tab, setTab] = useState("results");
   const total = TOP_100_COINS.length;
+
+  // Notify App ketika results berubah → App track coin untuk live price
+  useEffect(() => {
+    if (onResultsChange) onResultsChange(results);
+  }, [results, onResultsChange]);
 
   async function handleScan() {
     setLoading(true); setResults([]); setProgress(0); setAiAnalysis(null); setTab("results");
@@ -695,12 +700,18 @@ function ScreenerTab() {
                   </div>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px"}}>
-                  {[["Harga",`$${r.currentPrice}`,"#e2e8f0"],["Target",`$${r.targetLevel}`,r.signal==="LONG"?"#00c4ff":"#ff7070"]].map(([l,v,c])=>(
-                    <div key={l} style={{background:"rgba(0,0,0,0.2)",padding:"7px 9px",borderRadius:"7px"}}>
-                      <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"3px"}}>{l}</div>
-                      <div style={{fontSize:"13px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:c}}>{v}</div>
+                  <div style={{background:"rgba(0,0,0,0.2)",padding:"7px 9px",borderRadius:"7px"}}>
+                    <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"3px"}}>
+                      Harga Live {globalPrices[r.coin] ? "🟢" : ""}
                     </div>
-                  ))}
+                    <div style={{fontSize:"13px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:"#e2e8f0"}}>
+                      ${globalPrices[r.coin] ? globalPrices[r.coin].toFixed(4) : r.currentPrice}
+                    </div>
+                  </div>
+                  <div style={{background:"rgba(0,0,0,0.2)",padding:"7px 9px",borderRadius:"7px"}}>
+                    <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"3px"}}>Target Level</div>
+                    <div style={{fontSize:"13px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:r.signal==="LONG"?"#00c4ff":"#ff7070"}}>${r.targetLevel}</div>
+                  </div>
                 </div>
                 <div style={{fontSize:"10px",color:"#8899aa",background:"rgba(255,255,255,0.03)",padding:"7px 9px",borderRadius:"7px",lineHeight:"1.5"}}>
                   <span style={{color:ready?"#00ff88":"#ffb400",marginRight:"4px"}}>↳</span>{r.details}
@@ -833,7 +844,7 @@ function ScreenerTab() {
 }
 
 // ── DEMO TRADING COMPONENT ───────────────────────────────────────
-function DemoTrading({ decision, d4 }) {
+function DemoTrading({ decision, d4, globalPrices = {}, onPositionsChange }) {
   const BACKEND = "https://trading-backend-nu.vercel.app";
   const [positions, setPositions] = useState([]);
   const [stats, setStats] = useState({ wins:0, losses:0, winRate:0, totalPnl:0, open:0 });
@@ -851,36 +862,21 @@ function DemoTrading({ decision, d4 }) {
     loadPositions();
   }, []);
 
-  // Auto-refresh prices every 10s
+  // Notify App tentang open positions agar App track harga coin tersebut
   useEffect(() => {
-    const openPos = positions.filter(p => p.status === "open");
-    if (openPos.length === 0) return;
-    const coins = [...new Set(openPos.map(p => p.coin))];
-    const fetchPrices = async () => {
-  // Hanya log jika diperlukan untuk debugging
-  console.log("🔄 Memperbarui harga pasar..."); 
-  
-  for (const coin of coins) {
-    try {
-      // 1. &t=${Date.now()} memaksa browser mengambil data terbaru (Anti-Cache)
-      const url = `${BACKEND}/api/demo?action=price&symbol=${coin}&t=${Date.now()}`;
-      const r = await fetch(url);
-      const d = await r.json();
-      
-      // 2. Jika harga valid, update state
-      if (d && d.price) {
-        console.log(`✅ ${coin}: $${d.price}`); // Visualisasi di Console
-        setPrices(prev => ({ ...prev, [coin]: d.price }));
-      }
-    } catch (err) {
-      console.error(`❌ Gagal update harga ${coin}:`, err);
+    if (onPositionsChange) {
+      const openPos = positions.filter(p => p.status === "open");
+      onPositionsChange(openPos);
     }
-  }
-};
-    fetchPrices();
-    priceRef.current = setInterval(fetchPrices, 5000);
-    return () => clearInterval(priceRef.current);
-  }, [positions]);
+  }, [positions, onPositionsChange]);
+
+  // Reload positions tiap 10 detik (untuk dapat update SL/TP auto dari backend)
+  useEffect(() => {
+    const reloadInterval = setInterval(() => {
+      loadPositions();
+    }, 10000);
+    return () => clearInterval(reloadInterval);
+  }, []);
 
   async function loadPositions() {
     try {
@@ -931,7 +927,9 @@ function DemoTrading({ decision, d4 }) {
   }
 
   async function closePosition(pos) {
-    const price = prices[pos.coin] || pos.entryPrice;
+    const coinKey = (pos.coin || "").toUpperCase();
+    const lp = globalPrices[coinKey];
+    const price = (lp && lp > 0) ? lp : parseFloat(pos.entryPrice);
     const confirm = window.confirm(`Tutup posisi ${pos.direction} ${pos.coin} @ $${price}?\nEstimasi PnL: ${calcLivePnl(pos, price).pnlPct}%`);
     if (!confirm) return;
     try {
@@ -1004,7 +1002,8 @@ function DemoTrading({ decision, d4 }) {
               Analisis coin dulu di tab Trading,<br/>lalu klik "+ Open" untuk buka posisi demo.
             </div>
           ) : openPos.map(pos => {
-            const livePrice = prices[pos.coin] || pos.entryPrice;
+            const coinKey = (pos.coin || "").toUpperCase();
+            const livePrice = globalPrices[coinKey] || parseFloat(pos.entryPrice);
             const { pnlPct, pnlUsd } = calcLivePnl(pos, livePrice);
             const isProfit = parseFloat(pnlPct) >= 0;
             return (
@@ -1208,8 +1207,73 @@ export default function App() {
   const [chatLoad, setChatLoad] = useState(false);
   const [activeTab, setActiveTab] = useState("signal");
   const [aiModel, setAiModel] = useState("deepseek");
-  const [activeMainTab, setActiveMainTab] = useState("trading"); // "trading" | "demo"
+  const [activeMainTab, setActiveMainTab] = useState("trading"); // "trading" | "screener" | "demo"
   const endRef = useRef(null);
+
+  // ══════════════════════════════════════════════════════════════
+  // GLOBAL PRICE STATE — update setiap 5 detik untuk SEMUA TAB
+  // ══════════════════════════════════════════════════════════════
+  const [globalPrices, setGlobalPrices] = useState({});      // { BTC: 74897.6, ETH: 3200, ... }
+  const [screenerCoins, setScreenerCoins] = useState([]);    // dari hasil screener
+  const [openPositionCoins, setOpenPositionCoins] = useState([]); // dari demo trading open positions
+
+  // Ref untuk akses data terbaru di interval (hindari restart)
+  const trackedCoinsRef = useRef(new Set());
+
+  useEffect(() => {
+    // Gabungkan semua coin yang perlu di-track dari semua tab
+    const set = new Set();
+    if (activeCoin)              set.add(activeCoin.toUpperCase());     // Trading Agent
+    screenerCoins.forEach(c   => set.add((c || "").toUpperCase()));     // Screener results
+    openPositionCoins.forEach(c => set.add((c || "").toUpperCase()));   // Demo open positions
+    set.delete("");                                                      // hindari empty key
+    trackedCoinsRef.current = set;
+  }, [activeCoin, screenerCoins, openPositionCoins]);
+
+  // Callback untuk dipass ke child components
+  const handleScreenerResults = (results) => {
+    const coins = (results || []).map(r => (r.coin || "").toUpperCase()).filter(Boolean);
+    setScreenerCoins(coins);
+  };
+  const handleOpenPositions = (positions) => {
+    const coins = (positions || []).map(p => (p.coin || "").toUpperCase()).filter(Boolean);
+    setOpenPositionCoins(coins);
+  };
+
+  // GLOBAL INTERVAL — fetch harga semua coin yang di-track setiap 5 detik
+  useEffect(() => {
+    const fetchAllPrices = async () => {
+      const coins = [...trackedCoinsRef.current];
+      if (coins.length === 0) return;
+
+      // Fetch parallel — chunked 5 coin per batch supaya tidak overload
+      const updates = {};
+      for (let i = 0; i < coins.length; i += 5) {
+        const batch = coins.slice(i, i + 5);
+        const results = await Promise.all(
+          batch.map(coin =>
+            fetch(`${BACKEND_URL}/api/demo?action=price&symbol=${coin}&t=${Date.now()}`)
+              .then(r => r.json())
+              .then(d => ({ coin, price: d?.price }))
+              .catch(() => ({ coin, price: null }))
+          )
+        );
+        results.forEach(({ coin, price }) => {
+          if (typeof price === "number" && price > 0) {
+            updates[coin] = price;
+          }
+        });
+        if (i + 5 < coins.length) await new Promise(r => setTimeout(r, 200)); // small delay antar batch
+      }
+      if (Object.keys(updates).length > 0) {
+        setGlobalPrices(prev => ({ ...prev, ...updates }));
+      }
+    };
+
+    fetchAllPrices(); // fetch langsung saat mount
+    const interval = setInterval(fetchAllPrices, 5000);
+    return () => clearInterval(interval);
+  }, []); // hanya jalan SEKALI saat mount
 
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMsgs, chatLoad]);
 
@@ -1309,14 +1373,18 @@ export default function App() {
           ))}
         </div>
 
-        {/* SCREENER TAB */}
-        {activeMainTab==="screener" && <ScreenerTab />}
+        {/* SCREENER TAB — selalu mounted, hide/show via CSS */}
+        <div style={{display:activeMainTab==="screener"?"flex":"none",flex:activeMainTab==="screener"?1:"none",flexDirection:"column",overflow:"hidden"}}>
+          <ScreenerTab globalPrices={globalPrices} onResultsChange={handleScreenerResults}/>
+        </div>
 
-        {/* DEMO TRADING TAB */}
-        {activeMainTab==="demo" && <DemoTrading decision={decision} d4={d4}/>}
+        {/* DEMO TRADING TAB — selalu mounted, hide/show via CSS */}
+        <div style={{display:activeMainTab==="demo"?"flex":"none",flex:activeMainTab==="demo"?1:"none",flexDirection:"column",overflow:"hidden"}}>
+          <DemoTrading decision={decision} d4={d4} globalPrices={globalPrices} onPositionsChange={handleOpenPositions}/>
+        </div>
 
-        {/* TRADING AGENT TAB */}
-        {activeMainTab==="trading" && <>
+        {/* TRADING AGENT TAB — selalu mounted, hide/show via CSS */}
+        <div style={{display:activeMainTab==="trading"?"flex":"none",flex:activeMainTab==="trading"?1:"none",flexDirection:"column",overflow:"hidden"}}><>
 
         {/* COIN INPUT */}
         <div className="coin-sec">
@@ -1473,7 +1541,8 @@ export default function App() {
           </div>
         )}
 
-      </>}
+      </>
+        </div>
 
       </div>
     </>
