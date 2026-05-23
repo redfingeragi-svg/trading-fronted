@@ -2,7 +2,27 @@ import { useState, useEffect, useRef } from "react";
 
 const BACKEND_URL = "https://trading-backend-nu.vercel.app";
 
-// ── KEPUTUSAN DETERMINISTIK — BREAKOUT STRATEGY ────────────────
+// ── HELPER: Deteksi kondisi market (TRENDING / RANGING / MIXED) ──
+function detectMarketRegime(candles) {
+  if (!candles || candles.length < 50) return "UNKNOWN";
+  const closes = candles.map(c => c.close);
+  const recent20 = closes.slice(-20);
+  const sma20 = recent20.reduce((a, b) => a + b, 0) / 20;
+  const sma50 = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
+  const high20 = Math.max(...recent20);
+  const low20  = Math.min(...recent20);
+  const rangePct = ((high20 - low20) / sma20) * 100;
+  const maGapPct = (Math.abs(sma20 - sma50) / sma50) * 100;
+  if (maGapPct > 2 && rangePct > 5) return "TRENDING";
+  if (rangePct < 3)                  return "RANGING";
+  return "MIXED";
+}
+
+// ── KEPUTUSAN DETERMINISTIK — BREAKOUT + TOP 3 FILTERS ─────────
+// Top 3 Filter Optimasi:
+//   1. Market Regime Detection — skip entry saat RANGING/MIXED
+//   2. Volume Surge 2x SMA20 — bukan sekedar > SMA20
+//   3. Konfluensi 4H+1H WAJIB — bukan parsial
 function makeDecision(d4, d1) {
   if (!d4 || !d1) return null;
   const cp = parseFloat(d4.currentPrice);
@@ -72,32 +92,51 @@ function makeDecision(d4, d1) {
     };
   }
 
-  // ── FINAL DECISION ────────────────────────────────────────────
+  // ── FINAL DECISION dengan TOP 3 FILTER ────────────────────────
   let signal = "WAIT", setup = null, reasons = [], waitReasons = [], confidence = 0;
 
-  if (ranging) {
-    waitReasons.push(`MA separation ${sep4h}% — market RANGING, tunggu trending`);
-  } else if (l1Long && isBreakoutLong && volumeValid) {
-    signal = "LONG"; setup = longSetup; confidence = conf4h1hLong ? 88 : 72;
+  // FILTER #1: Market Regime — wajib TRENDING
+  if (!isTrending) {
+    waitReasons.push(`MARKET REGIME: ${regime} — strategi breakout hanya valid saat TRENDING. Skip entry.`);
+  }
+  // Filter ranging tambahan (MA separation)
+  else if (ranging) {
+    waitReasons.push(`MA separation ${sep4h}% — market terlalu sempit, tunggu trending kuat`);
+  }
+  // FILTER #3: Konfluensi WAJIB — LONG hanya jika 4H DAN 1H sama bullish
+  else if (l1Long && isBreakoutLong && volumeValid && conf4h1hLong) {
+    // ✅ SEMUA FILTER LOLOS — LONG signal
+    signal = "LONG"; setup = longSetup; confidence = 90;  // confidence tinggi karena strict
+    reasons.push(`✅ FILTER 1 REGIME: ${regime} — market sedang TRENDING`);
     reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
+    reasons.push(`✅ FILTER 3 KONFLUENSI: 4H + 1H sama-sama BULLISH (wajib)`);
     reasons.push(`✅ L2: Resistance terkuat $${strongestResistance.toFixed(2)} | Support $${strongestSupport?.toFixed(2)}`);
-    reasons.push(`✅ L3 BREAKOUT: Harga $${cp} menembus Resistance $${strongestResistance.toFixed(2)}`);
-    reasons.push(`✅ VOLUME: ${currentVol.toFixed(2)} > SMA20 ${smaVol20.toFixed(2)}`);
-    reasons.push(`✅ ENTRY: $${longSetup.entry} | SL: $${longSetup.sl} | TP: $${longSetup.tp}`);
-    if (conf4h1hLong) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H BULLISH`);
-    else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
-  } else if (l1Short && isBreakdownShort && volumeValid) {
-    signal = "SHORT"; setup = shortSetup; confidence = conf4h1hShort ? 88 : 72;
+    reasons.push(`✅ L3 BREAKOUT: Harga $${cp} menembus resistance $${strongestResistance.toFixed(2)}`);
+    reasons.push(`✅ FILTER 2 VOLUME SURGE: ${volumeRatio.toFixed(2)}x SMA20 (minimal 2x)`);
+    reasons.push(`✅ ENTRY: $${longSetup.entry} | SL: $${longSetup.sl} | TP: $${longSetup.tp} | RR 1:3`);
+  }
+  else if (l1Short && isBreakdownShort && volumeValid && conf4h1hShort) {
+    // ✅ SEMUA FILTER LOLOS — SHORT signal
+    signal = "SHORT"; setup = shortSetup; confidence = 90;
+    reasons.push(`✅ FILTER 1 REGIME: ${regime} — market sedang TRENDING`);
     reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
+    reasons.push(`✅ FILTER 3 KONFLUENSI: 4H + 1H sama-sama BEARISH (wajib)`);
     reasons.push(`✅ L2: Support terkuat $${strongestSupport.toFixed(2)} | Resistance $${strongestResistance?.toFixed(2)}`);
-    reasons.push(`✅ L3 BREAKDOWN: Harga $${cp} menembus Support $${strongestSupport.toFixed(2)}`);
-    reasons.push(`✅ VOLUME: ${currentVol.toFixed(2)} > SMA20 ${smaVol20.toFixed(2)}`);
-    reasons.push(`✅ ENTRY: $${shortSetup.entry} | SL: $${shortSetup.sl} | TP: $${shortSetup.tp}`);
-    if (conf4h1hShort) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H BEARISH`);
-    else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
-  } else {
-    if (!l1Long && !l1Short)
-      waitReasons.push(`L1: Trend ${trend4h?"BULLISH":"BEARISH"} + VMC ${d4.vmc.dot} — sinyal lemah`);
+    reasons.push(`✅ L3 BREAKDOWN: Harga $${cp} menembus support $${strongestSupport.toFixed(2)}`);
+    reasons.push(`✅ FILTER 2 VOLUME SURGE: ${volumeRatio.toFixed(2)}x SMA20 (minimal 2x)`);
+    reasons.push(`✅ ENTRY: $${shortSetup.entry} | SL: $${shortSetup.sl} | TP: $${shortSetup.tp} | RR 1:3`);
+  }
+  else {
+    // ❌ WAIT — breakdown filter yang gagal
+    if (!l1Long && !l1Short) {
+      waitReasons.push(`L1 GAGAL: Trend ${trend4h?"BULLISH":"BEARISH"} + VMC ${d4.vmc.dot} — sinyal lemah`);
+    }
+    if (l1Long && !conf4h1hLong) {
+      waitReasons.push(`FILTER 3 GAGAL: 4H BULLISH tapi 1H ${d1.maStatus} — konfluensi TIDAK lengkap. Tunggu 1H ikut bullish.`);
+    }
+    if (l1Short && !conf4h1hShort) {
+      waitReasons.push(`FILTER 3 GAGAL: 4H BEARISH tapi 1H ${d1.maStatus} — konfluensi TIDAK lengkap. Tunggu 1H ikut bearish.`);
+    }
     if (l1Long && !isBreakoutLong) {
       const gap = strongestResistance ? ((strongestResistance - cp)/cp*100).toFixed(2) : "?";
       waitReasons.push(`L3: Belum BREAKOUT — butuh naik ${gap}% ke resistance $${strongestResistance?.toFixed(2)}`);
@@ -106,23 +145,27 @@ function makeDecision(d4, d1) {
       const gap = strongestSupport ? ((cp - strongestSupport)/strongestSupport*100).toFixed(2) : "?";
       waitReasons.push(`L3: Belum BREAKDOWN — butuh turun ${gap}% ke support $${strongestSupport?.toFixed(2)}`);
     }
-    if ((l1Long && isBreakoutLong && !volumeValid) || (l1Short && isBreakdownShort && !volumeValid))
-      waitReasons.push(`VOLUME RENDAH: ${currentVol.toFixed(2)} < SMA20 ${smaVol20.toFixed(2)} — risiko fakeout`);
-    if (!waitReasons.length) waitReasons.push("Kondisi belum memenuhi semua layer");
+    if (((l1Long && isBreakoutLong) || (l1Short && isBreakdownShort)) && !volumeValid) {
+      waitReasons.push(`FILTER 2 GAGAL: Volume ${volumeRatio.toFixed(2)}x SMA20 — butuh minimal 2x. Risiko FAKEOUT tinggi.`);
+    }
+    if (!waitReasons.length) waitReasons.push("Kondisi belum memenuhi semua filter secara bersamaan");
   }
 
   const priceContext = [];
-  if (strongestSupport)    priceContext.push(`Support terkuat: $${strongestSupport.toFixed(2)}`);
-  if (strongestResistance) priceContext.push(`Resistance terkuat: $${strongestResistance.toFixed(2)}`);
-  priceContext.push(`Volume: ${currentVol.toFixed(2)} (SMA20: ${smaVol20.toFixed(2)})`);
+  priceContext.push(`🎯 Market Regime: ${regime}${isTrending ? " ✅" : " ⚠️"}`);
+  if (strongestSupport)    priceContext.push(`Support: $${strongestSupport.toFixed(2)}`);
+  if (strongestResistance) priceContext.push(`Resistance: $${strongestResistance.toFixed(2)}`);
+  priceContext.push(`Volume: ${volumeRatio.toFixed(2)}x SMA20${volumeValid ? " ✅" : " ⚠️ (perlu 2x)"}`);
 
   return {
     signal, confidence, setup, reasons, waitReasons, priceContext,
+    regime, isTrending, volumeRatio: volumeRatio.toFixed(2),
     layer1: { trend4h, trend1h, vmcBull4, vmcBear4, ranging, sep4h, l1Long, l1Short },
-    layer2: { strongestSupport, strongestResistance, currentVol, smaVol20, volumeValid,
+    layer2: { strongestSupport, strongestResistance, currentVol, smaVol20, volumeValid, volumeRatio,
               inLongZone: isBreakoutLong, inShortZone: isBreakdownShort },
     layer3: { isBreakoutLong, isBreakdownShort, longSetup, shortSetup },
     confluence: conf4h1hLong || conf4h1hShort,
+    confluenceRequired: true,
     sr: d4.sr, price: cp, pair: d4.pair, timestamp: d4.timestamp,
   };
 }
