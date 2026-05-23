@@ -532,55 +532,100 @@ function DecisionCard({ dec }) {
   );
 }
 
-// ── KOMPONEN SCREENER TAB (BARU) ──────────────────────────────
+// ── KOMPONEN SCREENER TAB (100 KOIN BATCHING) ──────────────────────────────
+const TOP_100_COINS = [
+  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", 
+  "MATIC", "LTC", "NEAR", "OP", "ARB", "INJ", "RNDR", "APT", "SUI", "SEI", 
+  "FET", "GALA", "SAND", "MANA", "FTM", "WLD", "TIA", "PEPE", "SHIB", "BCH", 
+  "ETC", "FIL", "ICP", "STX", "IMX", "GRT", "SNX", "MKR", "AAVE", "LDO", 
+  "RUNE", "QNT", "ALGO", "EGLD", "AXS", "THETA", "KAS", "ORDI", "1000SATS", "BONK", 
+  "WIF", "JUP", "PYTH", "DYM", "MANTA", "ALT", "STRK", "PIXEL", "PORTAL", "AEVO", 
+  "ETHFI", "ENA", "W", "TNSR", "OMNI", "REZ", "BB", "NOT", "IO", "ZK", 
+  "ZRO", "BLAST", "RENDER", "TON", "TRX", "XLM", "XMR", "VET", "AR", "HBAR", 
+  "MNT", "CRO", "ONDO", "PENDLE", "JTO", "CORE", "FLR", "KAVA", "GMX", "CFX", 
+  "FLOKI", "MEME", "BOME", "MEW", "BRETT", "POPCAT", "MOG", "DEGEN", "NEIRO", "TURBO"
+];
+
 function ScreenerTab() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [scanned, setScanned] = useState(0);
+  const [progress, setProgress] = useState(0);
+  const totalCoins = TOP_100_COINS.length;
 
   const handleScan = async () => {
     setLoading(true);
     setResults([]);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/screener`);
-      const data = await res.json();
-      if(data.success) {
-        setResults(data.data);
-        setScanned(data.scannedCount);
-      } else {
-        alert("Gagal scan: " + data.error);
-      }
-    } catch(err) {
-      alert("Error: " + err.message);
-    } finally {
-      setLoading(false);
+    setProgress(0);
+    
+    let tempResults = [];
+    const CHUNK_SIZE = 5; // Memproses 5 koin sekaligus agar BingX tidak memblokir kita
+    
+    for(let i=0; i < totalCoins; i += CHUNK_SIZE) {
+      const chunk = TOP_100_COINS.slice(i, i + CHUNK_SIZE);
+      
+      // Ambil data untuk 5 koin secara paralel
+      const promises = chunk.map(coin => 
+        fetch(`${BACKEND_URL}/api/screener?coin=${coin}`)
+          .then(r => r.json())
+          .catch(() => null) // Abaikan error jaringan
+      );
+      
+      const responses = await Promise.all(promises);
+      
+      // Filter hasil yang valid (yang lolos syarat READY / WATCH)
+      responses.forEach(res => {
+         if(res && res.success && res.data) {
+           tempResults.push(res.data);
+         }
+      });
+      
+      // Mengurutkan hasil screener secara real-time berdasarkan jarak terdekat (distanceToTarget)
+      tempResults.sort((a, b) => parseFloat(a.distanceToTarget) - parseFloat(b.distanceToTarget));
+      
+      setResults([...tempResults]); 
+      setProgress(Math.min(i + CHUNK_SIZE, totalCoins));
+      
+      // Delay penting: Tunggu 500ms sebelum memanggil BingX API untuk 5 koin berikutnya
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
+    
+    setLoading(false);
   };
+
+  const progressPct = ((progress / totalCoins) * 100).toFixed(0);
 
   return (
     <div style={{flex:1,overflowY:"auto",padding:"16px 14px",display:"flex",flexDirection:"column"}}>
       <div style={{marginBottom:"16px"}}>
         <button onClick={handleScan} disabled={loading}
           style={{width:"100%",background:"linear-gradient(135deg,#00ff88,#00c4ff)",border:"none",borderRadius:"10px",padding:"14px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"13px",color:"#080c14",cursor:loading?"not-allowed":"pointer",transition:"transform 0.2s"}}>
-          {loading ? "⏳ Sedang Memindai Pasar (Harap Tunggu)..." : "🔍 Analyze & Scan Top 25 Koin"}
+          {loading ? "⏳ Memindai Pasar..." : `🔍 Scan Top ${totalCoins} Koin Sekarang`}
         </button>
-        {scanned > 0 && !loading && (
-          <div style={{fontSize:"10px", color:"#6a8099", marginTop:"10px", textAlign:"center"}}>
-            Terakhir memindai <strong>{scanned} koin</strong>. Ditemukan <strong>{results.length} potensi</strong> dengan ambang batas (Proximity) ≤ 3%.
+        
+        {/* PROGRESS BAR */}
+        {(loading || progress > 0) && (
+          <div style={{marginTop:"10px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:"10px",color:"#6a8099",marginBottom:"4px"}}>
+              <span>Progress Pemindaian</span>
+              <span style={{color:"#00ff88",fontWeight:"700"}}>{progress} / {totalCoins} Koin ({progressPct}%)</span>
+            </div>
+            <div style={{width:"100%",height:"4px",background:"rgba(255,255,255,0.08)",borderRadius:"2px",overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${progressPct}%`,background:"linear-gradient(90deg,#00ff88,#00c4ff)",transition:"width 0.4s ease"}} />
+            </div>
           </div>
         )}
       </div>
 
-      {results.length === 0 && !loading && scanned > 0 && (
+      {results.length === 0 && !loading && progress === totalCoins && (
          <div style={{textAlign:"center",padding:"30px 20px",color:"#3a5060",fontSize:"12px",lineHeight:"1.8"}}>
-           📭 Tidak ada koin yang memenuhi kriteria.<br/>Semua koin terpantau masih jauh dari area Breakout/Breakdown.
+           📭 Tidak ada koin yang memenuhi kriteria.<br/>100 Koin terpantau masih jauh dari area Breakout/Breakdown.
          </div>
       )}
 
       {results.map((r, i) => {
         const isReady = r.status === "READY";
         return (
-          <div key={i} style={{background:isReady?"rgba(0,255,136,0.06)":"rgba(255,180,0,0.05)",border:`1px solid ${isReady?"rgba(0,255,136,0.3)":"rgba(255,180,0,0.2)"}`,borderRadius:"12px",padding:"14px",marginBottom:"12px",boxShadow:"0 4px 12px rgba(0,0,0,0.1)"}}>
+          <div key={i} style={{background:isReady?"rgba(0,255,136,0.06)":"rgba(255,180,0,0.05)",border:`1px solid ${isReady?"rgba(0,255,136,0.3)":"rgba(255,180,0,0.2)"}`,borderRadius:"12px",padding:"14px",marginBottom:"12px",boxShadow:"0 4px 12px rgba(0,0,0,0.1)", animation:"fadeUp 0.3s ease"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
               <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                 <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"16px",color:"#fff",letterSpacing:"0.05em"}}>{r.coin}</span>
@@ -613,7 +658,6 @@ function ScreenerTab() {
     </div>
   );
 }
-
 // ── DEMO TRADING COMPONENT ───────────────────────────────────────
 function DemoTrading({ decision, d4 }) {
   const BACKEND = "https://trading-backend-nu.vercel.app";
