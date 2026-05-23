@@ -20,8 +20,8 @@ function makeDecision(d4, d1) {
   const conf4h1hShort = !trend4h && !trend1h && vmcBear4;
 
   // ── LAYER 2: S&R TERKUAT dari candle history ─────────────────
-  const c1 = (d1.candles || []).slice(-72);
-  const c4 = (d4.candles || []).slice(-60);
+  const c1 = (d1.candles || []).slice(-73, -1);
+  const c4 = (d4.candles || []).slice(-61, -1);
   const highs = [...c1.map(c => c.high), ...c4.map(c => c.high)];
   const lows  = [...c1.map(c => c.low),  ...c4.map(c => c.low)];
   const strongestResistance = highs.length ? Math.max(...highs) : null;
