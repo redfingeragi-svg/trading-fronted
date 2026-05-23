@@ -536,107 +536,62 @@ function DecisionCard({ dec }) {
 function ScreenerTab() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [scanned, setScanned] = useState(0);
+  const [progress, setProgress] = useState(0);
 
-  // Di dalam App.jsx, update handleScan di ScreenerTab:
-const handleScan = async () => {
-  setLoading(true);
-  setResults([]);
-  setProgress(0);
-  
-  let tempResults = [];
-  const coins = await fetch(`${BACKEND_URL}/api/screener`).then(r => r.json().then(d => d.coins));
-  
-  for(let i=0; i < coins.length; i += 5) {
-    const chunk = coins.slice(i, i + 5);
-    const promises = chunk.map(c => fetch(`${BACKEND_URL}/api/screener?coin=${c}`).then(r => r.json()));
-    const responses = await Promise.all(promises);
-    
-    responses.forEach(res => {
-      if(res.success && res.data) {
-        // PANGGIL LOGIKA makeDecision YANG SUDAH ADA DI APP.JSX
-        const dec = makeDecision(res.data.d4, res.data.d1);
-        
-        // FILTER: Hanya masukkan yang READY atau WATCH (proximity 3%)
-        const dist = dec.layer3.isBreakoutLong ? 0 : 
-                     dec.layer3.isBreakdownShort ? 0 : 
-                     (dec.signal === "LONG" ? (dec.layer2.strongestResistance - dec.price)/dec.price : (dec.price - dec.layer2.strongestSupport)/dec.price);
-
-        if (dec.signal !== "WAIT" && dist <= 0.03) {
-          tempResults.push({
-            coin: res.data.coin,
-            signal: dec.signal,
-            status: dist === 0 ? "READY" : "WATCH",
-            currentPrice: dec.price,
-            targetLevel: dec.layer3.isBreakoutLong ? dec.layer2.strongestResistance : dec.layer2.strongestSupport,
-            distanceToTarget: (dist * 100).toFixed(2),
-            details: dist === 0 ? "Breakout/Breakdown Tervalidasi" : `Mendekati ${dist*100}%`
-          });
+  const handleScan = async () => {
+    setLoading(true); setResults([]); setProgress(0);
+    const coins = await fetch(`${BACKEND_URL}/api/screener`).then(r => r.json().then(d => d.coins));
+    let tempResults = [];
+    for(let i=0; i < coins.length; i += 5) {
+      const chunk = coins.slice(i, i + 5);
+      const responses = await Promise.all(chunk.map(c => fetch(`${BACKEND_URL}/api/screener?coin=${c}`).then(r => r.json())));
+      responses.forEach(res => {
+        if(res.success && res.data) {
+          const dec = makeDecision(res.data.d4, res.data.d1);
+          const dist = dec.layer3.isBreakoutLong ? 0 : dec.layer3.isBreakdownShort ? 0 : (dec.signal === "LONG" ? (dec.layer2.strongestResistance - dec.price)/dec.price : (dec.price - dec.layer2.strongestSupport)/dec.price);
+          if (dec.signal !== "WAIT" && dist <= 0.03) {
+            tempResults.push({ coin: res.data.coin, signal: dec.signal, status: dist === 0 ? "READY" : "WATCH", currentPrice: dec.price, targetLevel: dec.layer3.isBreakoutLong ? dec.layer2.strongestResistance : dec.layer2.strongestSupport, distanceToTarget: (dist * 100).toFixed(2), details: dist === 0 ? "Breakout Tervalidasi" : `Mendekati ${dist*100}%` });
+          }
         }
-      }
-    });
-    
-    setResults([...tempResults.sort((a,b) => a.distanceToTarget - b.distanceToTarget)]);
-    setProgress(Math.min(i + 5, coins.length));
-  }
-  setLoading(false);
-};
+      });
+      setResults([...tempResults.sort((a,b) => a.distanceToTarget - b.distanceToTarget)]);
+      setProgress(Math.min(i + 5, coins.length));
+      await new Promise(r => setTimeout(r, 600));
+    }
+    setLoading(false);
+  };
+
   return (
-    <div style={{flex:1,overflowY:"auto",padding:"16px 14px",display:"flex",flexDirection:"column"}}>
-      <div style={{marginBottom:"16px"}}>
-        <button onClick={handleScan} disabled={loading}
-          style={{width:"100%",background:"linear-gradient(135deg,#00ff88,#00c4ff)",border:"none",borderRadius:"10px",padding:"14px",fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"13px",color:"#080c14",cursor:loading?"not-allowed":"pointer",transition:"transform 0.2s"}}>
-          {loading ? "⏳ Sedang Memindai Pasar (Harap Tunggu)..." : "🔍 Analyze & Scan Top 25 Koin"}
-        </button>
-        {scanned > 0 && !loading && (
-          <div style={{fontSize:"10px", color:"#6a8099", marginTop:"10px", textAlign:"center"}}>
-            Terakhir memindai <strong>{scanned} koin</strong>. Ditemukan <strong>{results.length} potensi</strong> dengan ambang batas (Proximity) ≤ 3%.
+    <div style={{padding:"16px", color:"#fff"}}>
+      <button onClick={handleScan} disabled={loading} style={{width:"100%", padding:"12px", background:"#00ff88", border:"none", borderRadius:"8px", fontWeight:"bold"}}>
+        {loading ? `Scanning... ${progress}%` : "Mulai Scan Top 100 MarketCap"}
+      </button>
+      <div style={{marginTop:"20px"}}>
+        {results.map((r,i) => (
+          <div key={i} style={{background:"#161b22", padding:"12px", borderRadius:"8px", marginBottom:"8px", borderLeft: `4px solid ${r.status==="READY"?"#00ff88":"#ffb400"}`}}>
+            <div style={{display:"flex", justifyContent:"space-between"}}>
+              <strong>{r.coin}</strong> <span style={{color:r.signal==="LONG"?"#00ff88":"#ff5050"}}>{r.signal}</span>
+            </div>
+            <div style={{fontSize:"11px", color:"#8899aa"}}>{r.details}</div>
           </div>
-        )}
+        ))}
       </div>
-
-      {results.length === 0 && !loading && scanned > 0 && (
-         <div style={{textAlign:"center",padding:"30px 20px",color:"#3a5060",fontSize:"12px",lineHeight:"1.8"}}>
-           📭 Tidak ada koin yang memenuhi kriteria.<br/>Semua koin terpantau masih jauh dari area Breakout/Breakdown.
-         </div>
-      )}
-
-      {results.map((r, i) => {
-        const isReady = r.status === "READY";
-        return (
-          <div key={i} style={{background:isReady?"rgba(0,255,136,0.06)":"rgba(255,180,0,0.05)",border:`1px solid ${isReady?"rgba(0,255,136,0.3)":"rgba(255,180,0,0.2)"}`,borderRadius:"12px",padding:"14px",marginBottom:"12px",boxShadow:"0 4px 12px rgba(0,0,0,0.1)"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                <span style={{fontFamily:"'Syne',sans-serif",fontWeight:"800",fontSize:"16px",color:"#fff",letterSpacing:"0.05em"}}>{r.coin}</span>
-                <span style={{background:r.signal==="LONG"?"rgba(0,255,136,0.12)":"rgba(255,80,80,0.12)",color:r.signal==="LONG"?"#00ff88":"#ff5050",padding:"3px 8px",borderRadius:"6px",fontSize:"9px",fontWeight:"800",fontFamily:"'Syne',sans-serif",border:`1px solid ${r.signal==="LONG"?"rgba(0,255,136,0.3)":"rgba(255,80,80,0.3)"}`}}>
-                  {r.signal==="LONG"?"▲ LONG":"▼ SHORT"}
-                </span>
-              </div>
-              <div style={{background:isReady?"rgba(0,255,136,0.15)":"rgba(255,180,0,0.15)",color:isReady?"#00ff88":"#ffb400",padding:"4px 10px",borderRadius:"6px",fontSize:"10px",fontWeight:"800",fontFamily:"'Syne',sans-serif",letterSpacing:"0.05em"}}>
-                {isReady ? "🎯 READY" : "👁️ WATCH"}
-              </div>
-            </div>
-            
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"10px"}}>
-              <div style={{background:"rgba(0,0,0,0.2)",padding:"8px 10px",borderRadius:"8px"}}>
-                <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"4px"}}>Harga Saat Ini</div>
-                <div style={{fontSize:"14px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:"#e2e8f0"}}>${r.currentPrice}</div>
-              </div>
-              <div style={{background:"rgba(0,0,0,0.2)",padding:"8px 10px",borderRadius:"8px"}}>
-                <div style={{fontSize:"8px",color:"#4a6080",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"4px"}}>Target {r.signal==="LONG"?"Resistance":"Support"}</div>
-                <div style={{fontSize:"14px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:r.signal==="LONG"?"#00c4ff":"#ff7070"}}>${r.targetLevel}</div>
-              </div>
-            </div>
-            
-            <div style={{fontSize:"11px",color:"#8899aa",background:"rgba(255,255,255,0.03)",padding:"8px 10px",borderRadius:"8px",lineHeight:"1.5"}}>
-              <span style={{color:isReady?"#00ff88":"#ffb400",marginRight:"4px"}}>↳</span> {r.details}
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
+
+// ── MAIN APP (Ganti bagian return App utama Anda dengan ini) ──
+export default function App() {
+  const [activeMainTab, setActiveMainTab] = useState("trading");
+  // ... (tambahkan state lain yang diperlukan)
+  
+  return (
+    <div className="app">
+        <div style={{display:"flex",background:"rgba(0,0,0,0.4)",borderBottom:"2px solid rgba(0,255,136,0.15)"}}>
+          {[["trading","📊 Trading"],["screener","🔍 Screener"],["demo","🎮 Demo"]].map(([k,v])=>(
+            <button key={k} style={{flex:1,padding:"11px",background:activeMainTab===k?"rgba(0,255,136,0.1)":"transparent",border:"none",color:activeMainTab===k?"#00ff88":"#6a8099",cursor:"pointer"}}
+              onClick={()=>setActiveMainTab(k)}>{v}</button>
+          ))}
 
 // ── DEMO TRADING COMPONENT ───────────────────────────────────────
 function DemoTrading({ decision, d4 }) {
