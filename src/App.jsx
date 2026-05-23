@@ -538,25 +538,49 @@ function ScreenerTab() {
   const [loading, setLoading] = useState(false);
   const [scanned, setScanned] = useState(0);
 
-  const handleScan = async () => {
-    setLoading(true);
-    setResults([]);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/screener`);
-      const data = await res.json();
-      if(data.success) {
-        setResults(data.data);
-        setScanned(data.scannedCount);
-      } else {
-        alert("Gagal scan: " + data.error);
-      }
-    } catch(err) {
-      alert("Error: " + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Di dalam App.jsx, update handleScan di ScreenerTab:
+const handleScan = async () => {
+  setLoading(true);
+  setResults([]);
+  setProgress(0);
+  
+  let tempResults = [];
+  const coins = await fetch(`${BACKEND_URL}/api/screener`).then(r => r.json().then(d => d.coins));
+  
+  for(let i=0; i < coins.length; i += 5) {
+    const chunk = coins.slice(i, i + 5);
+    const promises = chunk.map(c => fetch(`${BACKEND_URL}/api/screener?coin=${c}`).then(r => r.json()));
+    const responses = await Promise.all(promises);
+    
+    responses.forEach(res => {
+      if(res.success && res.data) {
+        // PANGGIL LOGIKA makeDecision YANG SUDAH ADA DI APP.JSX
+        const dec = makeDecision(res.data.d4, res.data.d1);
+        
+        // FILTER: Hanya masukkan yang READY atau WATCH (proximity 3%)
+        const dist = dec.layer3.isBreakoutLong ? 0 : 
+                     dec.layer3.isBreakdownShort ? 0 : 
+                     (dec.signal === "LONG" ? (dec.layer2.strongestResistance - dec.price)/dec.price : (dec.price - dec.layer2.strongestSupport)/dec.price);
 
+        if (dec.signal !== "WAIT" && dist <= 0.03) {
+          tempResults.push({
+            coin: res.data.coin,
+            signal: dec.signal,
+            status: dist === 0 ? "READY" : "WATCH",
+            currentPrice: dec.price,
+            targetLevel: dec.layer3.isBreakoutLong ? dec.layer2.strongestResistance : dec.layer2.strongestSupport,
+            distanceToTarget: (dist * 100).toFixed(2),
+            details: dist === 0 ? "Breakout/Breakdown Tervalidasi" : `Mendekati ${dist*100}%`
+          });
+        }
+      }
+    });
+    
+    setResults([...tempResults.sort((a,b) => a.distanceToTarget - b.distanceToTarget)]);
+    setProgress(Math.min(i + 5, coins.length));
+  }
+  setLoading(false);
+};
   return (
     <div style={{flex:1,overflowY:"auto",padding:"16px 14px",display:"flex",flexDirection:"column"}}>
       <div style={{marginBottom:"16px"}}>
