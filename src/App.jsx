@@ -532,50 +532,66 @@ function DecisionCard({ dec }) {
   );
 }
 
-// ── KOMPONEN SCREENER TAB (BARU) ──────────────────────────────
+// ── KOMPONEN SCREENER TAB (100 KOIN BATCHING) ──────────────────────────────
+const TOP_100_COINS = [
+  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", 
+  "MATIC", "LTC", "NEAR", "OP", "ARB", "INJ", "RNDR", "APT", "SUI", "SEI", 
+  "FET", "GALA", "SAND", "MANA", "FTM", "WLD", "TIA", "PEPE", "SHIB", "BCH", 
+  "ETC", "FIL", "ICP", "STX", "IMX", "GRT", "SNX", "MKR", "AAVE", "LDO", 
+  "RUNE", "QNT", "ALGO", "EGLD", "AXS", "THETA", "KAS", "ORDI", "1000SATS", "BONK", 
+  "WIF", "JUP", "PYTH", "DYM", "MANTA", "ALT", "STRK", "PIXEL", "PORTAL", "AEVO", 
+  "ETHFI", "ENA", "W", "TNSR", "OMNI", "REZ", "BB", "NOT", "IO", "ZK", 
+  "ZRO", "BLAST", "RENDER", "TON", "TRX", "XLM", "XMR", "VET", "AR", "HBAR", 
+  "MNT", "CRO", "ONDO", "PENDLE", "JTO", "CORE", "FLR", "KAVA", "GMX", "CFX", 
+  "FLOKI", "MEME", "BOME", "MEW", "BRETT", "POPCAT", "MOG", "DEGEN", "NEIRO", "TURBO"
+];
+
 function ScreenerTab() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [totalCoins, setTotalCoins] = useState(0);
+  const totalCoins = TOP_100_COINS.length;
 
   const handleScan = async () => {
     setLoading(true);
     setResults([]);
-    
-    // 1. Ambil daftar 100 koin teratas dari backend/coingecko
-    const listRes = await fetch(`${BACKEND_URL}/api/screener`).then(r => r.json());
-    const coins = listRes.coins; // Ini daftar 100 koin dari market cap
-    setTotalCoins(coins.length);
+    setProgress(0);
     
     let tempResults = [];
-    const CHUNK_SIZE = 5; 
+    const CHUNK_SIZE = 5; // Memproses 5 koin sekaligus agar BingX tidak memblokir kita
     
-    for(let i=0; i < coins.length; i += CHUNK_SIZE) {
-      const chunk = coins.slice(i, i + CHUNK_SIZE);
+    for(let i=0; i < totalCoins; i += CHUNK_SIZE) {
+      const chunk = TOP_100_COINS.slice(i, i + CHUNK_SIZE);
+      
+      // Ambil data untuk 5 koin secara paralel
       const promises = chunk.map(coin => 
         fetch(`${BACKEND_URL}/api/screener?coin=${coin}`)
           .then(r => r.json())
-          .catch(() => null)
+          .catch(() => null) // Abaikan error jaringan
       );
       
       const responses = await Promise.all(promises);
+      
+      // Filter hasil yang valid (yang lolos syarat READY / WATCH)
       responses.forEach(res => {
          if(res && res.success && res.data) {
            tempResults.push(res.data);
          }
       });
       
+      // Mengurutkan hasil screener secara real-time berdasarkan jarak terdekat (distanceToTarget)
       tempResults.sort((a, b) => parseFloat(a.distanceToTarget) - parseFloat(b.distanceToTarget));
+      
       setResults([...tempResults]); 
-      setProgress(Math.min(i + CHUNK_SIZE, coins.length));
-      await new Promise(resolve => setTimeout(resolve, 600)); // Delay aman
+      setProgress(Math.min(i + CHUNK_SIZE, totalCoins));
+      
+      // Delay penting: Tunggu 500ms sebelum memanggil BingX API untuk 5 koin berikutnya
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
+    
     setLoading(false);
   };
-  
-  // ... (sisa UI ScreenerTab sama seperti sebelumnya)
-}
+
   const progressPct = ((progress / totalCoins) * 100).toFixed(0);
 
   return (
