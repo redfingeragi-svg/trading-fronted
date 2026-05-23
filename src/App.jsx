@@ -19,7 +19,8 @@ function makeDecision(d4, d1) {
   const conf4h1hLong  = trend4h && trend1h && vmcBull4;
   const conf4h1hShort = !trend4h && !trend1h && vmcBear4;
 
-  // ── LAYER 2: S&R TERKUAT dari candle history ─────────────────
+ // ── LAYER 2: S&R TERKUAT dari candle history ─────────────────
+  // Menggunakan slice(..., -1) agar candle yang sedang berjalan tidak ikut merubah S&R
   const c1 = (d1.candles || []).slice(-73, -1);
   const c4 = (d4.candles || []).slice(-61, -1);
   const highs = [...c1.map(c => c.high), ...c4.map(c => c.high)];
