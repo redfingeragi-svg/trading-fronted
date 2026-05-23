@@ -19,11 +19,16 @@ function makeDecision(d4, d1) {
   const conf4h1hLong  = trend4h && trend1h && vmcBull4;
   const conf4h1hShort = !trend4h && !trend1h && vmcBear4;
 
-  // ── LAYER 2: S&R TERKUAT dari candle history ─────────────────
-  const c1 = (d1.candles || []).slice(-72);
-  const c4 = (d4.candles || []).slice(-60);
-  const highs = [...c1.map(c => c.high), ...c4.map(c => c.high)];
-  const lows  = [...c1.map(c => c.low),  ...c4.map(c => c.low)];
+  // ── LAYER 2: S&R TERKUAT — FIX SELF-REFERENCE ────────────────
+  // Buang 3 candle terbaru dari pencarian → harga real-time tidak
+  // membandingkan dengan high-nya sendiri (mengejar ekor)
+  const EXCLUDE_RECENT = 3;
+  const base1h = (d1.candles || []).slice(-72);   // 3 hari TF 1H
+  const base4h = (d4.candles || []).slice(-60);   // 10 hari TF 4H
+  const hist1h = base1h.slice(0, -EXCLUDE_RECENT); // 69 candle untuk pencarian
+  const hist4h = base4h.slice(0, -EXCLUDE_RECENT); // 57 candle untuk pencarian
+  const highs = [...hist1h.map(c => c.high), ...hist4h.map(c => c.high)];
+  const lows  = [...hist1h.map(c => c.low),  ...hist4h.map(c => c.low)];
   const strongestResistance = highs.length ? Math.max(...highs) : null;
   const strongestSupport    = lows.length  ? Math.min(...lows)  : null;
 
@@ -33,9 +38,10 @@ function makeDecision(d4, d1) {
   const smaVol20     = volCandles.length ? volCandles.reduce((a,b) => a + b.volume, 0) / volCandles.length : 0;
   const volumeValid  = currentVol > smaVol20;
 
-  // ── LAYER 3: BREAKOUT DETECTION ──────────────────────────────
-  const isBreakoutLong   = strongestResistance && cp > strongestResistance;
-  const isBreakdownShort = strongestSupport    && cp < strongestSupport;
+  // ── LAYER 3: BREAKOUT DETECTION (buffer 0.3% filter false break) ──
+  const BREAKOUT_CONFIRM = 0.003;
+  const isBreakoutLong   = strongestResistance && cp > strongestResistance * (1 + BREAKOUT_CONFIRM);
+  const isBreakdownShort = strongestSupport    && cp < strongestSupport    * (1 - BREAKOUT_CONFIRM);
 
   let longSetup = null;
   if (isBreakoutLong) {
