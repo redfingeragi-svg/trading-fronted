@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 const BACKEND_URL = "https://trading-backend-nu.vercel.app";
 
@@ -1230,15 +1230,24 @@ export default function App() {
     trackedCoinsRef.current = set;
   }, [activeCoin, screenerCoins, openPositionCoins]);
 
-  // Callback untuk dipass ke child components
-  const handleScreenerResults = (results) => {
+  // Callback dengan useCallback agar reference STABIL antar render
+  // Tanpa ini → setiap render App buat function baru → child useEffect terpicu terus
+  const handleScreenerResults = useCallback((results) => {
     const coins = (results || []).map(r => (r.coin || "").toUpperCase()).filter(Boolean);
-    setScreenerCoins(coins);
-  };
-  const handleOpenPositions = (positions) => {
+    setScreenerCoins(prev => {
+      // Hindari update kalau coin sama (cegah re-render tidak perlu)
+      if (prev.length === coins.length && prev.every((c, i) => c === coins[i])) return prev;
+      return coins;
+    });
+  }, []);
+
+  const handleOpenPositions = useCallback((positions) => {
     const coins = (positions || []).map(p => (p.coin || "").toUpperCase()).filter(Boolean);
-    setOpenPositionCoins(coins);
-  };
+    setOpenPositionCoins(prev => {
+      if (prev.length === coins.length && prev.every((c, i) => c === coins[i])) return prev;
+      return coins;
+    });
+  }, []);
 
   // GLOBAL INTERVAL — fetch harga semua coin yang di-track setiap 5 detik
   useEffect(() => {
@@ -1384,7 +1393,7 @@ export default function App() {
         </div>
 
         {/* TRADING AGENT TAB — selalu mounted, hide/show via CSS */}
-        <div style={{display:activeMainTab==="trading"?"flex":"none",flex:activeMainTab==="trading"?1:"none",flexDirection:"column",overflow:"hidden"}}><>
+        <div style={{display:activeMainTab==="trading"?"flex":"none",flex:activeMainTab==="trading"?1:"none",flexDirection:"column",overflow:"hidden"}}>
 
         {/* COIN INPUT */}
         <div className="coin-sec">
@@ -1541,7 +1550,6 @@ export default function App() {
           </div>
         )}
 
-      </>
         </div>
 
       </div>
