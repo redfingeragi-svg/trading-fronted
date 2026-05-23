@@ -6,9 +6,7 @@ const BACKEND_URL = "https://trading-backend-nu.vercel.app";
 function makeDecision(d4, d1) {
   if (!d4 || !d1) return null;
 
-  const ez  = d4.entryZone;
-  const cp  = parseFloat(d4.currentPrice);
-  const sr  = d4.sr;
+  const cp = parseFloat(d4.currentPrice);
 
   // ── LAYER 1: TREND (MA13/21 + VuManChu 4H) ───────────────────
   const trend4h  = d4.trendBullish;
@@ -20,86 +18,62 @@ function makeDecision(d4, d1) {
   const l1Long   = trend4h && vmcBull4;
   const l1Short  = !trend4h && vmcBear4;
 
-  // Confluence 4H + 1H
   const conf4h1hLong  = trend4h && trend1h && vmcBull4;
   const conf4h1hShort = !trend4h && !trend1h && vmcBear4;
 
-  // ── LAYER 2: S&R ZONE CHECK ───────────────────────────────────
-  const inLongZone  = ez?.long?.inZone  ?? false;
-  const inShortZone = ez?.short?.inZone ?? false;
+  // ── LAYER 2: S&R TERKUAT & RATA-RATA VOLUME ──────────────────
+  const c1 = (d1.candles || []).slice(-72);
+  const c4 = (d4.candles || []).slice(-60);
+  
+  const highs = [...c1.map(c => c.high), ...c4.map(c => c.high)];
+  const lows = [...c1.map(c => c.low), ...c4.map(c => c.low)];
+  
+  const strongestResistance = highs.length ? Math.max(...highs) : null;
+  const strongestSupport = lows.length ? Math.min(...lows) : null;
 
-  // ── LAYER 3: ENTRY PRESISI + SL/TP (RR 1:3 acuan 4H) ─────────
-  // LOGIKA ENTRY:
-  // LONG:  entry = support_terkuat × 1.01~1.02 (1-2% DI ATAS support)
-  //        SL    = support_terkuat × 0.98 (2% DI BAWAH support)
-  //        TP    = entry + (entry - SL) × 3
-  //
-  // SHORT: entry = resistance_terkuat × 0.98~0.99 (1-2% DI BAWAH resistance)
-  //        SL    = resistance_terkuat × 1.02 (2% DI ATAS resistance)
-  //        TP    = entry - (SL - entry) × 3
+  // Volume SMA (menggunakan 1H untuk deteksi lonjakan volume yang lebih responsif)
+  const volCandles = (d1.candles || []).slice(-21, -1);
+  const currentVolume = d1.candles?.[d1.candles.length - 1]?.volume || 0;
+  const smaVolume20 = volCandles.length ? volCandles.reduce((a, b) => a + b.volume, 0) / volCandles.length : 0;
+  const volumeValid = currentVolume > smaVolume20;
 
-  // Cari support terkuat dari 4H (support terdekat di bawah harga)
-  const supportLevels    = (sr?.supportLevels || []).map(s => parseFloat(s)).filter(s => s < cp).sort((a,b) => b-a);
-  const resistanceLevels = (sr?.resistanceLevels || []).map(r => parseFloat(r)).filter(r => r > cp).sort((a,b) => a-b);
+  // ── LAYER 3: BREAKOUT DETECTION & SETUP ────────────────────────
+  const isBreakoutLong = strongestResistance && cp > strongestResistance;
+  const isBreakdownShort = strongestSupport && cp < strongestSupport;
 
-  const strongestSupport    = supportLevels[0] || null;    // support terdekat dari bawah
-  const strongestResistance = resistanceLevels[0] || null; // resistance terdekat dari atas
-
-  // Hitung jarak harga ke S&R dalam %
-  const distToSupport    = strongestSupport    ? ((cp - strongestSupport) / strongestSupport * 100)    : null;
-  const distToResistance = strongestResistance ? ((strongestResistance - cp) / cp * 100) : null;
-
-  // LONG setup — entry 1-2% di atas support terkuat
   let longSetup = null;
-  if (strongestSupport) {
-    // Entry ideal: 1.5% di atas support (tengah antara 1-2%)
-    const entryIdeal = parseFloat((strongestSupport * 1.015).toFixed(2));
-    // Gunakan harga saat ini jika sudah dalam range 1-2% di atas support
-    const entryLong  = (distToSupport >= 1.0 && distToSupport <= 2.5)
-                       ? parseFloat(cp.toFixed(2))
-                       : entryIdeal;
-    const sl         = parseFloat((strongestSupport * 0.98).toFixed(2));  // 2% bawah support
-    const risk       = parseFloat((entryLong - sl).toFixed(2));
-    const tp         = parseFloat((entryLong + risk * 3).toFixed(2));     // RR 1:3
-    const entryPct   = ((entryLong - strongestSupport) / strongestSupport * 100).toFixed(2);
+  if (isBreakoutLong) {
+    const sl = parseFloat((strongestResistance * 0.985).toFixed(2)); // 1.5% di bawah resistance yg ditembus
+    const risk = parseFloat((cp - sl).toFixed(2));
+    const tp = parseFloat((cp + risk * 3).toFixed(2));
     longSetup = {
-      entry:        entryLong.toFixed(2),
-      sl:           sl.toFixed(2),
-      tp:           tp.toFixed(2),
-      risk:         risk.toFixed(2),
-      reward:       (risk * 3).toFixed(2),
-      rrCalc:       `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
-      supportLevel: strongestSupport.toFixed(2),
-      entryNote:    `${entryPct}% di atas support $${strongestSupport.toFixed(2)}`,
-      distFromCurrent: distToSupport?.toFixed(2),
-      inRange:      distToSupport !== null && distToSupport >= 1.0 && distToSupport <= 2.5,
+      entry: cp.toFixed(2),
+      sl: sl.toFixed(2),
+      tp: tp.toFixed(2),
+      risk: risk.toFixed(2),
+      reward: (risk * 3).toFixed(2),
+      rrCalc: `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
+      supportLevel: strongestSupport?.toFixed(2),
+      resistanceLevel: strongestResistance.toFixed(2),
+      entryNote: `Breakout Resistance di $${strongestResistance.toFixed(2)}`
     };
   }
 
-  // SHORT setup — entry 1-2% di bawah resistance terkuat
   let shortSetup = null;
-  if (strongestResistance) {
-    // Entry ideal: 1.5% di bawah resistance (tengah antara 1-2%)
-    const entryIdeal = parseFloat((strongestResistance * 0.985).toFixed(2));
-    // Gunakan harga saat ini jika sudah dalam range 1-2% di bawah resistance
-    const entryShort = (distToResistance >= 1.0 && distToResistance <= 2.5)
-                       ? parseFloat(cp.toFixed(2))
-                       : entryIdeal;
-    const sl          = parseFloat((strongestResistance * 1.02).toFixed(2)); // 2% atas resistance
-    const risk        = parseFloat((sl - entryShort).toFixed(2));
-    const tp          = parseFloat((entryShort - risk * 3).toFixed(2));      // RR 1:3
-    const entryPct    = ((strongestResistance - entryShort) / strongestResistance * 100).toFixed(2);
+  if (isBreakdownShort) {
+    const sl = parseFloat((strongestSupport * 1.015).toFixed(2)); // 1.5% di atas support yg ditembus
+    const risk = parseFloat((sl - cp).toFixed(2));
+    const tp = parseFloat((cp - risk * 3).toFixed(2));
     shortSetup = {
-      entry:             entryShort.toFixed(2),
-      sl:                sl.toFixed(2),
-      tp:                tp.toFixed(2),
-      risk:              risk.toFixed(2),
-      reward:            (risk * 3).toFixed(2),
-      rrCalc:            `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
-      resistanceLevel:   strongestResistance.toFixed(2),
-      entryNote:         `${entryPct}% di bawah resistance $${strongestResistance.toFixed(2)}`,
-      distFromCurrent:   distToResistance?.toFixed(2),
-      inRange:           distToResistance !== null && distToResistance >= 1.0 && distToResistance <= 2.5,
+      entry: cp.toFixed(2),
+      sl: sl.toFixed(2),
+      tp: tp.toFixed(2),
+      risk: risk.toFixed(2),
+      reward: (risk * 3).toFixed(2),
+      rrCalc: `Risk: $${risk.toFixed(2)} | Reward: $${(risk*3).toFixed(2)} | RR: 1:3`,
+      supportLevel: strongestSupport.toFixed(2),
+      resistanceLevel: strongestResistance?.toFixed(2),
+      entryNote: `Breakdown Support di $${strongestSupport.toFixed(2)}`
     };
   }
 
@@ -112,72 +86,60 @@ function makeDecision(d4, d1) {
 
   if (ranging) {
     waitReasons.push(`MA separation hanya ${sep4h}% — market RANGING, sinyal tidak valid`);
-
-  } else if (l1Long && inLongZone && longSetup?.inRange) {
-    // LONG — semua 3 layer terpenuhi
-    signal     = "LONG";
-    setup      = longSetup;
-    confidence = conf4h1hLong ? 88 : 72;
-    reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
-    reasons.push(`✅ L2: Harga $${cp} dalam zona LONG — ${ez.long.distancePct} dari support`);
-    reasons.push(`✅ L3 ENTRY: $${longSetup.entry} (${longSetup.entryNote})`);
-    reasons.push(`✅ L3 SL: $${longSetup.sl} — 2% di bawah support $${longSetup.supportLevel}`);
-    reasons.push(`✅ L3 TP: $${longSetup.tp} — RR 1:3 (Risk $${longSetup.risk} → Reward $${longSetup.reward})`);
-    if (conf4h1hLong) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H sama-sama BULLISH`);
-    else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
-
-  } else if (l1Short && inShortZone && shortSetup?.inRange) {
-    // SHORT — semua 3 layer terpenuhi
-    signal     = "SHORT";
-    setup      = shortSetup;
-    confidence = conf4h1hShort ? 88 : 72;
-    reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
-    reasons.push(`✅ L2: Harga $${cp} dalam zona SHORT — ${ez.short.distancePct} ke resistance`);
-    reasons.push(`✅ L3 ENTRY: $${shortSetup.entry} (${shortSetup.entryNote})`);
-    reasons.push(`✅ L3 SL: $${shortSetup.sl} — 2% di atas resistance $${shortSetup.resistanceLevel}`);
-    reasons.push(`✅ L3 TP: $${shortSetup.tp} — RR 1:3 (Risk $${shortSetup.risk} → Reward $${shortSetup.reward})`);
-    if (conf4h1hShort) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H sama-sama BEARISH`);
-    else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
-
+  } else if (l1Long && isBreakoutLong) {
+    if (volumeValid) {
+      signal = "LONG";
+      setup = longSetup;
+      confidence = conf4h1hLong ? 88 : 72;
+      reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
+      reasons.push(`✅ L2: S&R Terkuat — R: $${strongestResistance.toFixed(2)} | S: $${strongestSupport.toFixed(2)}`);
+      reasons.push(`✅ L3 BREAKOUT: Harga $${cp} menembus Resistance $${strongestResistance.toFixed(2)}`);
+      reasons.push(`✅ L3 VOLUME: Volume saat ini (${currentVolume.toFixed(2)}) > Rata-rata 20 (${smaVolume20.toFixed(2)})`);
+      reasons.push(`✅ ENTRY: $${longSetup.entry} | SL: $${longSetup.sl} | TP: $${longSetup.tp}`);
+      if (conf4h1hLong) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H sama-sama BULLISH`);
+      else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
+    } else {
+      waitReasons.push(`Volume Rendah: Breakout Resistance $${strongestResistance.toFixed(2)} terjadi tapi volume (${currentVolume.toFixed(2)}) di bawah rata-rata (${smaVolume20.toFixed(2)}). Fakeout risk!`);
+    }
+  } else if (l1Short && isBreakdownShort) {
+    if (volumeValid) {
+      signal = "SHORT";
+      setup = shortSetup;
+      confidence = conf4h1hShort ? 88 : 72;
+      reasons.push(`✅ L1: ${d4.maStatus} + VMC ${d4.vmc.dot !== "NONE" ? d4.vmc.dot : "MF " + d4.vmc.moneyFlow}`);
+      reasons.push(`✅ L2: S&R Terkuat — R: $${strongestResistance.toFixed(2)} | S: $${strongestSupport.toFixed(2)}`);
+      reasons.push(`✅ L3 BREAKDOWN: Harga $${cp} menembus Support $${strongestSupport.toFixed(2)}`);
+      reasons.push(`✅ L3 VOLUME: Volume saat ini (${currentVolume.toFixed(2)}) > Rata-rata 20 (${smaVolume20.toFixed(2)})`);
+      reasons.push(`✅ ENTRY: $${shortSetup.entry} | SL: $${shortSetup.sl} | TP: $${shortSetup.tp}`);
+      if (conf4h1hShort) reasons.push(`✅ KONFLUENSI KUAT: 4H + 1H sama-sama BEARISH`);
+      else reasons.push(`⚠️ 1H: ${d1.maStatus} — konfluensi parsial`);
+    } else {
+      waitReasons.push(`Volume Rendah: Breakdown Support $${strongestSupport.toFixed(2)} terjadi tapi volume (${currentVolume.toFixed(2)}) di bawah rata-rata (${smaVolume20.toFixed(2)}). Fakeout risk!`);
+    }
   } else {
-    // WAIT — breakdown layer mana yang gagal
     if (!l1Long && !l1Short) {
       waitReasons.push(`L1 GAGAL: Trend ${trend4h?"BULLISH":"BEARISH"} + VMC ${d4.vmc.dot} + MF ${d4.vmc.moneyFlow} — tidak ada sinyal valid`);
     }
-    if (l1Long && !inLongZone) {
-      const target = ez?.long?.entryZoneMin;
-      const dist   = target ? ((cp - parseFloat(target)) / parseFloat(target) * 100).toFixed(1) : "?";
-      waitReasons.push(`L2 GAGAL LONG: Harga $${cp} belum di zona. Tunggu turun ke zona $${ez?.long?.entryZoneMin}–$${ez?.long?.entryZoneMax} (${dist}% lagi)`);
+    if (l1Long && !isBreakoutLong) {
+      const dist = strongestResistance ? ((strongestResistance - cp) / cp * 100).toFixed(2) : "?";
+      waitReasons.push(`L2/L3 GAGAL: Harga $${cp} belum Breakout Resistance $${strongestResistance?.toFixed(2)} (Butuh naik ${dist}%)`);
     }
-    if (l1Short && !inShortZone) {
-      const target = ez?.short?.entryZoneMax;
-      const dist   = target ? ((parseFloat(target) - cp) / cp * 100).toFixed(1) : "?";
-      waitReasons.push(`L2 GAGAL SHORT: Harga $${cp} belum di zona. Tunggu naik ke zona $${ez?.short?.entryZoneMin}–$${ez?.short?.entryZoneMax} (${dist}% lagi)`);
-    }
-    if (l1Long && inLongZone && longSetup && !longSetup.inRange) {
-      waitReasons.push(`L3 GAGAL LONG: Harga $${cp} dalam zona tapi terlalu jauh dari support. Butuh 1-2% di atas $${longSetup.supportLevel} (sekarang ${longSetup.distFromCurrent}%)`);
-    }
-    if (l1Short && inShortZone && shortSetup && !shortSetup.inRange) {
-      waitReasons.push(`L3 GAGAL SHORT: Harga $${cp} dalam zona tapi terlalu jauh dari resistance. Butuh 1-2% di bawah $${shortSetup.resistanceLevel} (sekarang ${shortSetup.distFromCurrent}%)`);
-    }
-    if (!strongestSupport && !strongestResistance) {
-      waitReasons.push("L3 GAGAL: Tidak ada level S&R terdeteksi dari data 100 candle 4H");
-    }
-    if (waitReasons.length === 0) {
-      waitReasons.push("Kondisi belum memenuhi semua 3 layer secara bersamaan");
+    if (l1Short && !isBreakdownShort) {
+      const dist = strongestSupport ? ((cp - strongestSupport) / strongestSupport * 100).toFixed(2) : "?";
+      waitReasons.push(`L2/L3 GAGAL: Harga $${cp} belum Breakdown Support $${strongestSupport?.toFixed(2)} (Butuh turun ${dist}%)`);
     }
   }
 
-  // Info: berapa % harga ke S&R terdekat
   const priceContext = [];
-  if (strongestSupport)    priceContext.push(`Support terkuat: $${strongestSupport.toFixed(2)} (${distToSupport?.toFixed(2)}% di bawah harga)`);
-  if (strongestResistance) priceContext.push(`Resistance terkuat: $${strongestResistance.toFixed(2)} (${distToResistance?.toFixed(2)}% di atas harga)`);
+  if (strongestSupport)    priceContext.push(`Support terkuat (1H/4H): $${strongestSupport.toFixed(2)}`);
+  if (strongestResistance) priceContext.push(`Resistance terkuat (1H/4H): $${strongestResistance.toFixed(2)}`);
+  priceContext.push(`Volume: ${currentVolume.toFixed(2)} (SMA20: ${smaVolume20.toFixed(2)})`);
 
   return {
     signal, confidence, setup, reasons, waitReasons, priceContext,
     layer1: { trend4h, trend1h, vmcBull4, vmcBear4, ranging, sep4h, l1Long, l1Short },
-    layer2: { inLongZone, inShortZone, longZone: ez?.long, shortZone: ez?.short },
-    layer3: { longSetup, shortSetup, strongestSupport, strongestResistance },
+    layer2: { strongestSupport, strongestResistance, currentVolume, smaVolume20, volumeValid },
+    layer3: { isBreakoutLong, isBreakdownShort, longSetup, shortSetup },
     confluence: conf4h1hLong || conf4h1hShort,
     sr: d4.sr,
     price: cp,
@@ -522,7 +484,7 @@ function DecisionCard({ dec }) {
             <span style={{fontSize:"16px"}}>{dec.signal==="LONG"?"📍":"📍"}</span>
             <div>
               <div style={{fontSize:"8px",color:"#00c4ff",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"3px"}}>
-                POSISI ENTRY — {dec.signal==="LONG"?"1-2% DI ATAS SUPPORT TERKUAT":"1-2% DI BAWAH RESISTANCE TERKUAT"}
+                POSISI ENTRY — {dec.signal==="LONG"?"BREAKOUT RESISTANCE DENGAN VOLUME":"BREAKDOWN SUPPORT DENGAN VOLUME"}
               </div>
               <div style={{fontSize:"11px",color:"#c8d8e8",lineHeight:"1.5"}}>
                 {dec.setup.entryNote}
@@ -539,12 +501,12 @@ function DecisionCard({ dec }) {
             <div className="pb pb-sl">
               <div className="pb-lbl">Stop Loss</div>
               <div className="pb-val">${fmt(dec.setup.sl)}</div>
-              <div className="pb-note">2% di {dec.signal==="LONG"?"bawah support":"atas resistance"} ${dec.signal==="LONG"?dec.setup.supportLevel:dec.setup.resistanceLevel}</div>
+              <div className="pb-note">1.5% di {dec.signal==="LONG"?"bawah resistance":"atas support"} ${dec.signal==="LONG"?dec.setup.resistanceLevel:dec.setup.supportLevel}</div>
             </div>
             <div className="pb pb-tp">
               <div className="pb-lbl">Take Profit (Target)</div>
               <div className="pb-val">${fmt(dec.setup.tp)}</div>
-              <div className="pb-note">RR 1:3 dari acuan 4H</div>
+              <div className="pb-note">RR 1:3 dari acuan breakout</div>
             </div>
           </div>
           <div className="rr-strip">
@@ -570,7 +532,6 @@ function DecisionCard({ dec }) {
   );
 }
 
-
 // ── DEMO TRADING COMPONENT ───────────────────────────────────────
 function DemoTrading({ decision, d4 }) {
   const BACKEND = "https://trading-backend-nu.vercel.app";
@@ -581,64 +542,39 @@ function DemoTrading({ decision, d4 }) {
   const [prices, setPrices] = useState({});
   const [openModal, setOpenModal] = useState(false);
   const [learnLoading, setLearnLoading] = useState(false);
-  const [demoTab, setDemoTab] = useState("open"); // open | history | insight
+  const [demoTab, setDemoTab] = useState("open");
   const [form, setForm] = useState({ coin:"BTC", direction:"LONG", size:"100", notes:"" });
   const priceRef = useRef(null);
 
-  // Load positions on mount
   useEffect(() => {
     loadPositions();
   }, []);
 
-  // ── FIX: Auto-refresh harga realtime setiap 5 detik ──────────
-  // Menggunakan positionsRef agar interval tidak restart tiap posisi berubah
-  const positionsRef = useRef(positions);
-  useEffect(() => { positionsRef.current = positions; }, [positions]);
-
   useEffect(() => {
+    const openPos = positions.filter(p => p.status === "open");
+    if (openPos.length === 0) return;
+    const coins = [...new Set(openPos.map(p => p.coin))];
     const fetchPrices = async () => {
-      const openPos = positionsRef.current.filter(p => p.status === "open");
-      if (openPos.length === 0) return;
-      const coins = [...new Set(openPos.map(p => p.coin))];
       for (const coin of coins) {
         try {
           const r = await fetch(`${BACKEND}/api/demo?action=price&symbol=${coin}&t=${Date.now()}`);
           const d = await r.json();
-          if (d && typeof d.price === "number" && d.price > 0) {
-            setPrices(prev => ({ ...prev, [coin]: d.price }));
+          if (d.price) {
+            setPrices(prev => ({...prev, [coin.toUpperCase()]: d.price}));
           }
         } catch {}
       }
     };
-    // Fetch langsung saat mount
     fetchPrices();
-    // Interval setiap 5 detik, tidak tergantung state positions
-    priceRef.current = setInterval(fetchPrices, 5000);
+    priceRef.current = setInterval(fetchPrices, 10000);
     return () => clearInterval(priceRef.current);
-  }, []); // ← empty dependency: hanya jalan sekali
-
-  // Normalize Supabase snake_case → camelCase untuk frontend
-  function normPos(p) {
-    return {
-      ...p,
-      entryPrice:        p.entry_price       ?? p.entryPrice,
-      closePrice:        p.close_price        ?? p.closePrice,
-      slPrice:           p.sl_price           ?? p.slPrice,
-      tpPrice:           p.tp_price           ?? p.tpPrice,
-      pnlPct:            p.pnl_pct            ?? p.pnlPct ?? 0,
-      pnlUsd:            p.pnl_usd            ?? p.pnlUsd ?? 0,
-      signalConfidence:  p.signal_confidence  ?? p.signalConfidence ?? 0,
-      openTime:          p.open_time          ?? p.openTime,
-      closeTime:         p.close_time         ?? p.closeTime,
-      closedBy:          p.closed_by          ?? p.closedBy,
-    };
-  }
+  }, [positions]);
 
   async function loadPositions() {
     try {
       const r = await fetch(`${BACKEND}/api/demo?action=list`);
       const d = await r.json();
-      setPositions((d.positions || []).map(normPos));
+      setPositions(d.positions || []);
       setStats(d.stats || {});
       setPatterns(d.patterns || []);
     } catch {}
@@ -683,10 +619,8 @@ function DemoTrading({ decision, d4 }) {
   }
 
   async function closePosition(pos) {
-    const lp = prices[pos.coin];
-    const price = (lp && lp > 0) ? lp : parseFloat(pos.entryPrice || pos.entry_price);
-    const { pnlPct } = calcLivePnl(pos, price);
-    const confirm = window.confirm(`Tutup posisi ${pos.direction} ${pos.coin} @ $${price}?\nEstimasi PnL: ${pnlPct}%`);
+    const price = prices[pos.coin.toUpperCase()] || pos.entryPrice;
+    const confirm = window.confirm(`Tutup posisi ${pos.direction} ${pos.coin} @ $${price}?\nEstimasi PnL: ${calcLivePnl(pos, price).pnlPct}%`);
     if (!confirm) return;
     try {
       const r = await fetch(`${BACKEND}/api/demo?action=close`, {
@@ -711,13 +645,10 @@ function DemoTrading({ decision, d4 }) {
   }
 
   function calcLivePnl(pos, currentPrice) {
-    const entry = parseFloat(pos.entryPrice || pos.entry_price || 0);
-    const price = parseFloat(currentPrice) || entry;
-    if (!entry || !price) return { pnlPct:"0.000", pnlUsd:"0.00" };
-    const pnlPct = pos.direction === "LONG"
-      ? ((price - entry) / entry * 100)
-      : ((entry - price) / entry * 100);
-    const pnlUsd = (pnlPct / 100) * parseFloat(pos.size || 100);
+    const entry = parseFloat(pos.entryPrice);
+    const price = parseFloat(currentPrice || pos.currentPrice || entry);
+    const pnlPct = pos.direction === "LONG" ? ((price-entry)/entry*100) : ((entry-price)/entry*100);
+    const pnlUsd = (pnlPct/100) * parseFloat(pos.size);
     return { pnlPct: pnlPct.toFixed(3), pnlUsd: pnlUsd.toFixed(2) };
   }
 
@@ -761,7 +692,8 @@ function DemoTrading({ decision, d4 }) {
               Analisis coin dulu di tab Trading,<br/>lalu klik "+ Open" untuk buka posisi demo.
             </div>
           ) : openPos.map(pos => {
-            const livePrice = prices[pos.coin] || pos.entryPrice;
+            const coinKey = pos.coin ? pos.coin.toUpperCase() : "";
+            const livePrice = prices[coinKey] || pos.entryPrice;
             const { pnlPct, pnlUsd } = calcLivePnl(pos, livePrice);
             const isProfit = parseFloat(pnlPct) >= 0;
             return (
@@ -902,7 +834,7 @@ function DemoTrading({ decision, d4 }) {
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"14px"}}>
               {[["Coin",<input value={form.coin} onChange={e=>setForm(p=>({...p,coin:e.target.value.toUpperCase()}))} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"7px",padding:"8px 10px",color:"#e2e8f0",fontFamily:"Space Mono,monospace",width:"100%",outline:"none",fontSize:"12px"}}/>],
-               ["Size (USD)",<input type="number" value={form.size} onChange={e=>setForm(p=>({...p,size:e.target.value}))} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"7px",padding:"8px 10px",color:"#e2e8f0",fontFamily:"Space Mono,monospace",width:"100%",outline:"none",fontSize:"12px"}}/>]
+                ["Size (USD)",<input type="number" value={form.size} onChange={e=>setForm(p=>({...p,size:e.target.value}))} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:"7px",padding:"8px 10px",color:"#e2e8f0",fontFamily:"Space Mono,monospace",width:"100%",outline:"none",fontSize:"12px"}}/>]
               ].map(([l,inp])=>(
                 <div key={l}>
                   <div style={{fontSize:"8px",color:"#4a6080",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"5px"}}>{l}</div>
@@ -965,7 +897,7 @@ export default function App() {
   const [chatLoad, setChatLoad] = useState(false);
   const [activeTab, setActiveTab] = useState("signal");
   const [aiModel, setAiModel] = useState("deepseek");
-  const [activeMainTab, setActiveMainTab] = useState("trading"); // "trading" | "demo"
+  const [activeMainTab, setActiveMainTab] = useState("trading");
   const endRef = useRef(null);
 
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMsgs, chatLoad]);
@@ -983,7 +915,6 @@ export default function App() {
       if (j4.error) throw new Error(j4.error);
       if (j1.error) throw new Error(j1.error);
       setD4(j4); setD1(j1);
-      // Keputusan deterministik langsung — tanpa AI API
       const dec = makeDecision(j4, j1);
       setDecision(dec);
       setFetchStatus("");
@@ -1001,7 +932,6 @@ export default function App() {
     fetchAndDecide(coin);
   }
 
-  // Chat via backend proxy — API key aman di Vercel env variable
   async function handleChat() {
     const text = manual.trim();
     if (!text || chatLoad) return;
@@ -1009,10 +939,10 @@ export default function App() {
       `Pair: ${decision.pair} | Harga: $${decision.price}`,
       `Keputusan: ${decision.signal} | Confidence: ${decision.confidence}%`,
       decision.setup ? `Entry: $${decision.setup.entry} | SL: $${decision.setup.sl} | TP: $${decision.setup.tp}` : "",
-      `Trend 4H: ${decision.layer1?.trend4h?"BULLISH":"BEARISH"} | Zone Long: ${decision.layer2?.inLongZone} | Zone Short: ${decision.layer2?.inShortZone}`,
-      `S&R: R=${decision.sr?.nearestResistance||"—"} | S=${decision.sr?.nearestSupport||"—"}`,
+      `Trend 4H: ${decision.layer1?.trend4h?"BULLISH":"BEARISH"}`,
+      `S&R Terkuat: R=$${decision.layer2?.strongestResistance?.toFixed(2)||"—"} | S=$${decision.layer2?.strongestSupport?.toFixed(2)||"—"}`,
       [...(decision.reasons||[]),...(decision.waitReasons||[])].join(" | "),
-    ].filter(Boolean).join("\n") : "";
+    ].filter(Boolean).join("\\n") : "";
     setChatMsgs(prev=>[...prev,{role:"user",content:text}]);
     setManual("");
     const nh = [...chatHistory, {role:"user", content:text}];
@@ -1038,21 +968,19 @@ export default function App() {
     <>
       <style>{CSS}</style>
       <div className="app">
-        {/* HEADER */}
         <div className="hdr">
           <div className="logo">AI</div>
           <div className="hdr-t">
-            <h1>TRADING AGENT — MA × VMC × S{"&"}R</h1>
+            <h1>TRADING AGENT — BREAKOUT + VOLUME</h1>
             <p>BINGX FUTURES LIVE · 3-LAYER DECISION · RR 1:3</p>
           </div>
           <div className="hdr-r">
-            <span className="bdg bdg-p">S{"&"}R</span>
+            <span className="bdg bdg-p">VOL</span>
             <span className="bdg bdg-g">RR 1:3</span>
             <span className="live-i"><span className="dot-l"/>LIVE</span>
           </div>
         </div>
 
-        {/* MAIN TAB SWITCHER */}
         <div style={{display:"flex",background:"rgba(0,0,0,0.4)",borderBottom:"2px solid rgba(0,255,136,0.15)"}}>
           {[["trading","📊 Trading Agent"],["demo","🎮 Demo Trading"]].map(([k,v])=>(
             <button key={k}
@@ -1066,13 +994,9 @@ export default function App() {
           ))}
         </div>
 
-        {/* DEMO TRADING TAB */}
         {activeMainTab==="demo" && <DemoTrading decision={decision} d4={d4}/>}
 
-        {/* TRADING AGENT TAB */}
         {activeMainTab==="trading" && <>
-
-        {/* COIN INPUT */}
         <div className="coin-sec">
           <div className="sec-lbl">Masukkan nama coin → keputusan otomatis</div>
           <div className="coin-row">
@@ -1095,7 +1019,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* TABS */}
         {(d4||decision) && (
           <div style={{display:"flex",borderBottom:"1px solid rgba(0,255,136,0.1)",background:"rgba(0,0,0,0.3)"}}>
             {[["signal","🎯 Keputusan"],["data","📊 Data"],["chat","💬 Tanya AI"]].map(([k,v])=>(
@@ -1109,16 +1032,15 @@ export default function App() {
           </div>
         )}
 
-        {/* SIGNAL TAB — KEPUTUSAN UTAMA */}
         {activeTab==="signal" && (
           <div style={{flex:1,overflowY:"auto",paddingBottom:"16px"}}>
             {!decision && !fetching && (
               <div style={{padding:"20px 14px"}}>
                 <div className="welcome">
-                  <h2>Trading Agent <span>v6</span></h2>
+                  <h2>Trading Agent <span>v7</span></h2>
                   <p>Ketik nama coin → agent fetch data BingX Futures → evaluasi 3-layer → keluarkan <strong style={{color:"#00ff88"}}>KEPUTUSAN FINAL</strong> langsung tanpa perlu input manual.</p>
                   <div className="flow">
-                    {[["1","Fetch data BingX Futures (4H + 1H)"],["2","Layer 1: Cek trend MA13/21 + VuManChu"],["3","Layer 2: Cek posisi vs Support & Resistance"],["4","Layer 3: Hitung SL & TP (RR 1:3)"],["5","Output: LONG / SHORT / WAIT + alasan"]].map(([n,t])=>(
+                    {[["1","Fetch data BingX Futures (4H + 1H)"],["2","Layer 1: Cek trend MA13/21 + VuManChu"],["3","Layer 2: Cari S&R Terkuat & Cek Volume SMA 20"],["4","Layer 3: Deteksi Breakout/Breakdown"],["5","Output: LONG / SHORT / WAIT + alasan"]].map(([n,t])=>(
                       <div key={n} className="flow-item"><div className="flow-n">{n}</div><span>{t}</span></div>
                     ))}
                   </div>
@@ -1129,18 +1051,14 @@ export default function App() {
           </div>
         )}
 
-        {/* DATA TAB */}
         {activeTab==="data" && (
           <div style={{flex:1,overflowY:"auto",paddingBottom:"16px"}}>
             <LiveCard d4={d4} d1={d1}/>
           </div>
         )}
 
-        {/* CHAT TAB */}
         {activeTab==="chat" && (
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-
-            {/* MODEL SELECTOR */}
             <div style={{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,0.05)",background:"rgba(0,0,0,0.25)"}}>
               <div style={{fontSize:"8px",color:"#3a5060",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"7px"}}>Pilih AI Assistant</div>
               <div style={{display:"flex",gap:"8px"}}>
@@ -1176,7 +1094,7 @@ export default function App() {
                     {aiModel==="deepseek"?"DeepSeek V3 — Technical Analyst":"Hermes 3 — Experienced Trader"} siap menjawab
                   </div>
                   {aiModel==="deepseek"
-                    ? <span>Contoh: "Kenapa WAIT?", "Kapan bisa entry?",<br/>"Jelaskan kondisi VMC"</span>
+                    ? <span>Contoh: "Kenapa WAIT?", "Kapan bisa entry?",<br/>"Jelaskan kondisi Volume"</span>
                     : <span>Tanya perspektif natural:<br/>"Gimana kondisi market ini?", "Layak entry gak?",<br/>"Apa yang kamu lihat dari chart ini?"</span>
                   }
                 </div>
