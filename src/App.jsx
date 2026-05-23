@@ -19,20 +19,21 @@ function makeDecision(d4, d1) {
   const conf4h1hLong  = trend4h && trend1h && vmcBull4;
   const conf4h1hShort = !trend4h && !trend1h && vmcBear4;
 
- // ── LAYER 2: S&R TERKUAT dari candle history ─────────────────
-  // Menggunakan slice(..., -1) agar candle yang sedang berjalan tidak ikut merubah S&R
-  const c1 = (d1.candles || []).slice(-72, -1);
-  const c4 = (d4.candles || []).slice(-60, -1);
+ // ── LAYER 2: S&R TERKUAT & RATA-RATA VOLUME ──────────────────
+  // Menggunakan slice(-73, -1) agar candle yang aktif tidak menggeser target harga
+  const c1 = (d1.candles || []).slice(-73, -1);
+  const c4 = (d4.candles || []).slice(-61, -1);
+  
   const highs = [...c1.map(c => c.high), ...c4.map(c => c.high)];
-  const lows  = [...c1.map(c => c.low),  ...c4.map(c => c.low)];
+  const lows = [...c1.map(c => c.low), ...c4.map(c => c.low)];
+  
   const strongestResistance = highs.length ? Math.max(...highs) : null;
-  const strongestSupport    = lows.length  ? Math.min(...lows)  : null;
+  const strongestSupport = lows.length ? Math.min(...lows) : null;
 
-  // Volume confirmation
-  const volCandles   = (d1.candles || []).slice(-21, -1);
-  const currentVol   = d1.candles?.[d1.candles.length - 1]?.volume || 0;
-  const smaVol20     = volCandles.length ? volCandles.reduce((a,b) => a + b.volume, 0) / volCandles.length : 0;
-  const volumeValid  = currentVol > smaVol20;
+  const volCandles = (d1.candles || []).slice(-21, -1);
+  const currentVolume = d1.candles?.[d1.candles.length - 1]?.volume || 0;
+  const smaVolume20 = volCandles.length ? volCandles.reduce((a, b) => a + b.volume, 0) / volCandles.length : 0;
+  const volumeValid = currentVolume > smaVolume20;
 
   // ── LAYER 3: BREAKOUT DETECTION ──────────────────────────────
   const isBreakoutLong   = strongestResistance && cp > strongestResistance;
