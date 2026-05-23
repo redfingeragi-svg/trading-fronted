@@ -590,42 +590,55 @@ function DemoTrading({ decision, d4 }) {
     loadPositions();
   }, []);
 
-  // Auto-refresh prices every 10s
+  // ── FIX: Auto-refresh harga realtime setiap 5 detik ──────────
+  // Menggunakan positionsRef agar interval tidak restart tiap posisi berubah
+  const positionsRef = useRef(positions);
+  useEffect(() => { positionsRef.current = positions; }, [positions]);
+
   useEffect(() => {
-    const openPos = positions.filter(p => p.status === "open");
-    if (openPos.length === 0) return;
-    const coins = [...new Set(openPos.map(p => p.coin))];
     const fetchPrices = async () => {
-  // Hanya log jika diperlukan untuk debugging
-  console.log("🔄 Memperbarui harga pasar..."); 
-  
-  for (const coin of coins) {
-    try {
-      // 1. &t=${Date.now()} memaksa browser mengambil data terbaru (Anti-Cache)
-      const url = `${BACKEND}/api/demo?action=price&symbol=${coin}&t=${Date.now()}`;
-      const r = await fetch(url);
-      const d = await r.json();
-      
-      // 2. Jika harga valid, update state
-      if (d && d.price) {
-        console.log(`✅ ${coin}: $${d.price}`); // Visualisasi di Console
-        setPrices(prev => ({ ...prev, [coin]: d.price }));
+      const openPos = positionsRef.current.filter(p => p.status === "open");
+      if (openPos.length === 0) return;
+      const coins = [...new Set(openPos.map(p => p.coin))];
+      for (const coin of coins) {
+        try {
+          const r = await fetch(`${BACKEND}/api/demo?action=price&symbol=${coin}&t=${Date.now()}`);
+          const d = await r.json();
+          if (d && typeof d.price === "number" && d.price > 0) {
+            setPrices(prev => ({ ...prev, [coin]: d.price }));
+          }
+        } catch {}
       }
-    } catch (err) {
-      console.error(`❌ Gagal update harga ${coin}:`, err);
-    }
-  }
-};
+    };
+    // Fetch langsung saat mount
     fetchPrices();
+    // Interval setiap 5 detik, tidak tergantung state positions
     priceRef.current = setInterval(fetchPrices, 5000);
     return () => clearInterval(priceRef.current);
-  }, [positions]);
+  }, []); // ← empty dependency: hanya jalan sekali
+
+  // Normalize Supabase snake_case → camelCase untuk frontend
+  function normPos(p) {
+    return {
+      ...p,
+      entryPrice:        p.entry_price       ?? p.entryPrice,
+      closePrice:        p.close_price        ?? p.closePrice,
+      slPrice:           p.sl_price           ?? p.slPrice,
+      tpPrice:           p.tp_price           ?? p.tpPrice,
+      pnlPct:            p.pnl_pct            ?? p.pnlPct ?? 0,
+      pnlUsd:            p.pnl_usd            ?? p.pnlUsd ?? 0,
+      signalConfidence:  p.signal_confidence  ?? p.signalConfidence ?? 0,
+      openTime:          p.open_time          ?? p.openTime,
+      closeTime:         p.close_time         ?? p.closeTime,
+      closedBy:          p.closed_by          ?? p.closedBy,
+    };
+  }
 
   async function loadPositions() {
     try {
       const r = await fetch(`${BACKEND}/api/demo?action=list`);
       const d = await r.json();
-      setPositions(d.positions || []);
+      setPositions((d.positions || []).map(normPos));
       setStats(d.stats || {});
       setPatterns(d.patterns || []);
     } catch {}
@@ -670,8 +683,10 @@ function DemoTrading({ decision, d4 }) {
   }
 
   async function closePosition(pos) {
-    const price = prices[pos.coin] || pos.entryPrice;
-    const confirm = window.confirm(`Tutup posisi ${pos.direction} ${pos.coin} @ $${price}?\nEstimasi PnL: ${calcLivePnl(pos, price).pnlPct}%`);
+    const lp = prices[pos.coin];
+    const price = (lp && lp > 0) ? lp : parseFloat(pos.entryPrice || pos.entry_price);
+    const { pnlPct } = calcLivePnl(pos, price);
+    const confirm = window.confirm(`Tutup posisi ${pos.direction} ${pos.coin} @ $${price}?\nEstimasi PnL: ${pnlPct}%`);
     if (!confirm) return;
     try {
       const r = await fetch(`${BACKEND}/api/demo?action=close`, {
@@ -696,10 +711,13 @@ function DemoTrading({ decision, d4 }) {
   }
 
   function calcLivePnl(pos, currentPrice) {
-    const entry = parseFloat(pos.entryPrice);
-    const price = parseFloat(currentPrice || pos.currentPrice || entry);
-    const pnlPct = pos.direction === "LONG" ? ((price-entry)/entry*100) : ((entry-price)/entry*100);
-    const pnlUsd = (pnlPct/100) * parseFloat(pos.size);
+    const entry = parseFloat(pos.entryPrice || pos.entry_price || 0);
+    const price = parseFloat(currentPrice) || entry;
+    if (!entry || !price) return { pnlPct:"0.000", pnlUsd:"0.00" };
+    const pnlPct = pos.direction === "LONG"
+      ? ((price - entry) / entry * 100)
+      : ((entry - price) / entry * 100);
+    const pnlUsd = (pnlPct / 100) * parseFloat(pos.size || 100);
     return { pnlPct: pnlPct.toFixed(3), pnlUsd: pnlUsd.toFixed(2) };
   }
 
