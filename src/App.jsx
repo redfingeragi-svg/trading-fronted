@@ -52,11 +52,17 @@ function makeDecision(d4, d1) {
   const strongestResistance = highs.length ? Math.max(...highs) : null;
   const strongestSupport    = lows.length  ? Math.min(...lows)  : null;
 
-  // Volume confirmation
+  // Volume Surge confirmation — minimal 2x SMA20 (FILTER #2)
+  const VOLUME_SURGE_MIN = 2.0;
   const volCandles   = (d1.candles || []).slice(-21, -1);
   const currentVol   = d1.candles?.[d1.candles.length - 1]?.volume || 0;
   const smaVol20     = volCandles.length ? volCandles.reduce((a,b) => a + b.volume, 0) / volCandles.length : 0;
-  const volumeValid  = currentVol > smaVol20;
+  const volumeRatio  = smaVol20 > 0 ? currentVol / smaVol20 : 0;
+  const volumeValid  = volumeRatio >= VOLUME_SURGE_MIN;
+
+  // Market Regime Detection (FILTER #1) — strategi breakout cuma efektif di TRENDING
+  const regime = detectMarketRegime(d4.candles || []);
+  const isTrending = regime === "TRENDING";
 
   // ── LAYER 3: BREAKOUT DETECTION (buffer 0.3% filter false break) ──
   const BREAKOUT_CONFIRM = 0.003;
