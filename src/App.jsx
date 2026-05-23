@@ -4,7 +4,7 @@ const BACKEND_URL = "https://trading-backend-nu.vercel.app";
 
 // ── KEPUTUSAN DETERMINISTIK — BREAKOUT STRATEGY ────────────────
 function makeDecision(d4, d1) {
-  if (!d4 || !d1) return null;
+  if (!d4 || !d1 || !d4.vmc || !d1.vmc) return null;
   const cp = parseFloat(d4.currentPrice);
 
   // ── LAYER 1: TREND (TIDAK BERUBAH) ───────────────────────────
