@@ -21,8 +21,8 @@ function makeDecision(d4, d1) {
 
  // ── LAYER 2: S&R TERKUAT dari candle history ─────────────────
   // Menggunakan slice(..., -1) agar candle yang sedang berjalan tidak ikut merubah S&R
-  const c1 = (d1.candles || []).slice(-73, -1);
-  const c4 = (d4.candles || []).slice(-61, -1);
+  const c1 = (d1.candles || []).slice(-72, -1);
+  const c4 = (d4.candles || []).slice(-60, -1);
   const highs = [...c1.map(c => c.high), ...c4.map(c => c.high)];
   const lows  = [...c1.map(c => c.low),  ...c4.map(c => c.low)];
   const strongestResistance = highs.length ? Math.max(...highs) : null;
