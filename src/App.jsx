@@ -602,7 +602,7 @@ function ScreenerTab() {
     for(let i=0; i < totalCoins; i += CHUNK_SIZE) {
       const chunk = TOP_100_COINS.slice(i, i + CHUNK_SIZE);
       const promises = chunk.map(coin =>
-        fetch(`${BACKEND_URL}/api/screener-ai?coin=${coin}`).then(r => r.json()).catch(() => null)
+        fetch(`${BACKEND_URL}/api/screener?coin=${coin}`).then(r => r.json()).catch(() => null)
       );
       const responses = await Promise.all(promises);
       responses.forEach(res => { if(res && res.success && res.data) tempResults.push(res.data); });
